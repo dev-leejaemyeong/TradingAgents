@@ -192,6 +192,13 @@ class PortfolioDecision(BaseModel):
     extraction pass is required. Field descriptions double as the model's
     output instructions, so the prompt body only needs to convey context and
     the rating-scale guidance.
+
+    ``stop_loss``/``take_profit``/``position_size_usd`` are the Portfolio
+    Manager's final numbers (informed by, but not bound to, the Trader's
+    proposal) and are the values a downstream Python layer should hard-clamp
+    against a budget/sanity check before acting on this decision — this
+    schema is the single source of truth for execution-relevant numbers, not
+    the Trader's proposal.
     """
 
     rating: PortfolioRating = Field(
@@ -221,8 +228,31 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
+    stop_loss: float | None = Field(
+        default=None,
+        description=(
+            "The final stop-loss price in the instrument's quote currency. "
+            "Consider the Trader's proposed stop-loss but decide the final "
+            "number yourself, informed by the risk debate."
+        ),
+    )
+    take_profit: float | None = Field(
+        default=None,
+        description=(
+            "The final take-profit price in the instrument's quote currency, "
+            "at which the position should be closed for a gain."
+        ),
+    )
+    position_size_usd: float | None = Field(
+        default=None,
+        description=(
+            "The final dollar amount to allocate to this position, no greater "
+            "than the available buying-power figure stated in the prompt "
+            "context, if one was given."
+        ),
+    )
 
-    @field_validator("price_target", mode="before")
+    @field_validator("price_target", "stop_loss", "take_profit", "position_size_usd", mode="before")
     @classmethod
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
@@ -247,6 +277,12 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
+    if decision.stop_loss is not None:
+        parts.extend(["", f"**Stop Loss**: {decision.stop_loss}"])
+    if decision.take_profit is not None:
+        parts.extend(["", f"**Take Profit**: {decision.take_profit}"])
+    if decision.position_size_usd is not None:
+        parts.extend(["", f"**Position Size**: ${decision.position_size_usd:,.2f}"])
     return "\n".join(parts)
 
 

@@ -3,6 +3,8 @@ from typing import Annotated
 from langgraph.graph import MessagesState
 from typing_extensions import TypedDict
 
+from tradingagents.agents.schemas import PortfolioDecision
+
 
 # Researcher team state
 class InvestDebateState(TypedDict):
@@ -73,4 +75,11 @@ class AgentState(MessagesState):
         RiskDebateState, "Current state of the debate on evaluating risk"
     ]
     final_trade_decision: Annotated[str, "Final decision made by the Risk Analysts"]
+    final_trade_decision_structured: Annotated[
+        PortfolioDecision | None,
+        "Parsed PortfolioDecision behind final_trade_decision; None when the "
+        "Portfolio Manager fell back to free-text generation. The source of "
+        "truth for a downstream Python hard-clamp layer's stop_loss/"
+        "take_profit/position_size_usd checks.",
+    ]
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]

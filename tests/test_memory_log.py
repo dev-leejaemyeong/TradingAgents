@@ -739,6 +739,76 @@ class TestPortfolioManagerInjection:
         result = pm_node(_make_pm_state())
         assert result["final_trade_decision"] == plain_response
 
+    def test_pm_renders_stop_loss_take_profit_position_size(self):
+        """stop_loss/take_profit/position_size_usd are the numbers a downstream
+        Python hard-clamp layer needs (Open Questions: hard-clamp target
+        node) — they must round-trip into the rendered markdown."""
+        captured = {}
+        decision = PortfolioDecision(
+            rating=PortfolioRating.BUY,
+            executive_summary="Enter core position.",
+            investment_thesis="Momentum and fundamentals aligned.",
+            stop_loss=178.0,
+            take_profit=225.0,
+            position_size_usd=15000.0,
+        )
+        llm = _structured_pm_llm(captured, decision)
+        pm_node = create_portfolio_manager(llm)
+        md = pm_node(_make_pm_state())["final_trade_decision"]
+        assert "**Stop Loss**: 178.0" in md
+        assert "**Take Profit**: 225.0" in md
+        assert "**Position Size**: $15,000.00" in md
+
+    def test_pm_omits_execution_fields_when_absent(self):
+        captured = {}
+        llm = _structured_pm_llm(captured)  # default decision leaves them unset
+        pm_node = create_portfolio_manager(llm)
+        md = pm_node(_make_pm_state())["final_trade_decision"]
+        assert "Stop Loss" not in md
+        assert "Take Profit" not in md
+        assert "Position Size" not in md
+
+    def test_pm_exposes_parsed_decision_in_state(self):
+        """final_trade_decision_structured carries the parsed PortfolioDecision
+        so a Python hard-clamp layer can read numeric fields directly instead
+        of re-parsing the rendered markdown."""
+        captured = {}
+        decision = PortfolioDecision(
+            rating=PortfolioRating.BUY,
+            executive_summary="s",
+            investment_thesis="t",
+            stop_loss=178.0,
+            take_profit=225.0,
+            position_size_usd=15000.0,
+        )
+        llm = _structured_pm_llm(captured, decision)
+        pm_node = create_portfolio_manager(llm)
+        result = pm_node(_make_pm_state())
+        assert result["final_trade_decision_structured"] is decision
+        assert result["final_trade_decision_structured"].stop_loss == 178.0
+
+    def test_pm_parsed_decision_is_none_on_freetext_fallback(self):
+        """When the provider doesn't support structured output, there is no
+        parsed object to hand the hard-clamp layer — it must fall back to
+        the config default per Premise 6-a, not crash on a missing field."""
+        llm = MagicMock()
+        llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
+        llm.invoke.return_value = MagicMock(content="**Rating**: Hold\n\nNo edge.")
+        pm_node = create_portfolio_manager(llm)
+        result = pm_node(_make_pm_state())
+        assert result["final_trade_decision_structured"] is None
+
+    def test_pm_prompt_instructs_concrete_execution_numbers(self):
+        """The prompt body must ask for stop_loss/take_profit/position_size_usd
+        explicitly, not rely on the schema field descriptions alone, since the
+        Trader's proposal is only advisory context at this point."""
+        captured = {}
+        llm = _structured_pm_llm(captured)
+        create_portfolio_manager(llm)(_make_pm_state())
+        assert "stop_loss" in captured["prompt"]
+        assert "take_profit" in captured["prompt"]
+        assert "position_size_usd" in captured["prompt"]
+
     # get_past_context ordering and limits
 
     def test_same_ticker_prioritised(self, tmp_path):

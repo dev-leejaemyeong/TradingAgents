@@ -56,19 +56,26 @@ def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Any | None:
         return None
 
 
-def invoke_structured_or_freetext(
+def invoke_structured(
     structured_llm: Any | None,
     plain_llm: Any,
     prompt: Any,
     render: Callable[[T], str],
     agent_name: str,
-) -> str:
+) -> tuple[str, T | None]:
     """Run the structured call and render to markdown; fall back to free-text on any failure.
 
     ``prompt`` is whatever the underlying LLM accepts (a string for chat
     invocations, a list of message dicts for chat models that take that
     shape). The same value is forwarded to the free-text path so the
     fallback sees the same input the structured call did.
+
+    Returns ``(rendered_markdown, parsed_object)``. The parsed object is
+    ``None`` whenever the free-text fallback fired (unsupported provider,
+    structured call failure, or a thinking model returning no parsed
+    result) — callers that need the typed numeric fields (e.g. a Python
+    hard-clamp layer) must handle that case rather than re-parsing the
+    markdown.
     """
     if structured_llm is not None:
         try:
@@ -78,7 +85,7 @@ def invoke_structured_or_freetext(
                 # the tool, leaving the parser with nothing to return. Treat it
                 # as a structured miss and fall back, with a clear reason.
                 raise ValueError("structured output returned no parsed result")
-            return render(result)
+            return render(result), result
         except Exception as exc:
             logger.warning(
                 "%s: structured-output invocation failed (%s); retrying once as free text",
@@ -86,4 +93,18 @@ def invoke_structured_or_freetext(
             )
 
     response = plain_llm.invoke(prompt)
-    return response.content
+    return response.content, None
+
+
+def invoke_structured_or_freetext(
+    structured_llm: Any | None,
+    plain_llm: Any,
+    prompt: Any,
+    render: Callable[[T], str],
+    agent_name: str,
+) -> str:
+    """Same as ``invoke_structured`` but for callers that only need the
+    rendered markdown (Research Manager, Trader, Sentiment Analyst — nothing
+    downstream needs their parsed object today)."""
+    rendered, _parsed = invoke_structured(structured_llm, plain_llm, prompt, render, agent_name)
+    return rendered

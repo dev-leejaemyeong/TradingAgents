@@ -4,8 +4,12 @@ Uses LangChain's ``with_structured_output`` so the LLM produces a typed
 ``PortfolioDecision`` directly, in a single call.  The result is rendered
 back to markdown for storage in ``final_trade_decision`` so memory log,
 CLI display, and saved reports continue to consume the same shape they do
-today.  When a provider does not expose structured output, the agent falls
-back gracefully to free-text generation.
+today.  The parsed object itself is also kept, in
+``final_trade_decision_structured`` — a downstream Python hard-clamp layer
+needs the typed ``stop_loss``/``take_profit``/``position_size_usd`` fields,
+not a re-parse of the markdown.  When a provider does not expose structured
+output, the agent falls back gracefully to free-text generation and
+``final_trade_decision_structured`` is ``None``.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from tradingagents.agents.utils.agent_utils import (
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
-    invoke_structured_or_freetext,
+    invoke_structured,
 )
 
 
@@ -63,10 +67,13 @@ def create_portfolio_manager(llm):
 ---
 
 Be decisive and ground every conclusion in specific evidence from the analysts.
+Set concrete stop_loss/take_profit/position_size_usd values — consider the
+Trader's proposal above but decide the final numbers yourself; these are the
+numbers that will actually be used to size and manage the position.
 
 {NO_EXTERNAL_TOOLS}{get_language_instruction()}"""
 
-        final_trade_decision = invoke_structured_or_freetext(
+        final_trade_decision, pm_decision = invoke_structured(
             structured_llm,
             llm,
             prompt,
@@ -90,6 +97,7 @@ Be decisive and ground every conclusion in specific evidence from the analysts.
         return {
             "risk_debate_state": new_risk_debate_state,
             "final_trade_decision": final_trade_decision,
+            "final_trade_decision_structured": pm_decision,
         }
 
     return portfolio_manager_node

@@ -97,6 +97,20 @@ class TestNullishFloatCoercion:
         )
         assert d.price_target is None
 
+    def test_pm_nullish_execution_fields_coerce_to_none(self):
+        for sentinel in ("None", "N/A", "null", "-", "", "TBD"):
+            d = PortfolioDecision(
+                rating=PortfolioRating.OVERWEIGHT,
+                executive_summary="s",
+                investment_thesis="t",
+                stop_loss=sentinel,
+                take_profit=sentinel,
+                position_size_usd=sentinel,
+            )
+            assert d.stop_loss is None
+            assert d.take_profit is None
+            assert d.position_size_usd is None
+
 
 @pytest.mark.unit
 class TestRenderResearchPlan:
@@ -168,6 +182,57 @@ def test_invoke_structured_falls_back_when_result_is_none():
     )
     assert out == "FREETEXT"
     plain.invoke.assert_called_once()
+
+
+@pytest.mark.unit
+class TestInvokeStructured:
+    """invoke_structured() is invoke_structured_or_freetext()'s sibling: same
+    fallback behavior, but also returns the parsed object so callers that
+    need typed numeric fields (e.g. a Python hard-clamp layer reading
+    PortfolioDecision.stop_loss) don't have to re-parse rendered markdown."""
+
+    def test_structured_path_returns_rendered_and_parsed(self):
+        from tradingagents.agents.utils.structured import invoke_structured
+
+        proposal = TraderProposal(action=TraderAction.BUY, reasoning="x")
+        structured = MagicMock()
+        structured.invoke.return_value = proposal
+        plain = MagicMock()
+
+        rendered, parsed = invoke_structured(
+            structured, plain, "prompt", render_trader_proposal, "Trader"
+        )
+        assert parsed is proposal
+        assert "**Action**: Buy" in rendered
+        plain.invoke.assert_not_called()
+
+    def test_freetext_fallback_returns_none_parsed(self):
+        """structured_llm=None (unsupported provider, per bind_structured) skips
+        the structured attempt entirely and goes straight to free text."""
+        from tradingagents.agents.utils.structured import invoke_structured
+
+        plain = MagicMock()
+        plain.invoke.return_value = MagicMock(content="FREETEXT")
+
+        rendered, parsed = invoke_structured(
+            None, plain, "prompt", render=lambda r: r.rating, agent_name="t"
+        )
+        assert rendered == "FREETEXT"
+        assert parsed is None
+
+    def test_structured_call_failure_falls_back_with_none_parsed(self):
+        from tradingagents.agents.utils.structured import invoke_structured
+
+        structured = MagicMock()
+        structured.invoke.side_effect = ValueError("bad JSON from model")
+        plain = MagicMock()
+        plain.invoke.return_value = MagicMock(content="FREETEXT")
+
+        rendered, parsed = invoke_structured(
+            structured, plain, "prompt", render=lambda r: r.rating, agent_name="t"
+        )
+        assert rendered == "FREETEXT"
+        assert parsed is None
 
 
 @pytest.mark.unit
