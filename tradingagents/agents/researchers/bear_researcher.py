@@ -1,7 +1,10 @@
+from langchain_core.messages import HumanMessage
+
 from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
 )
+from tradingagents.agents.utils.prompt_caching import cached_blocks
 
 
 def create_bear_researcher(llm):
@@ -24,7 +27,10 @@ def create_bear_researcher(llm):
             else "Asset fundamentals report (may be unavailable for crypto)"
         )
 
-        prompt = f"""You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
+        # See prompt_caching.py: role instructions + this run's reports repeat
+        # unchanged on every bull/bear turn of this debate, so they're cached;
+        # history/current_response grow each turn and stay uncached and last.
+        role_and_resources = f"""You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
 
 Key points to focus on:
 
@@ -41,12 +47,14 @@ Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
 {fundamentals_label}: {fundamentals_report}
-Conversation history of the debate: {history}
+"""
+        debate_state = f"""Conversation history of the debate: {history}
 Last bull argument: {current_response}
 Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the {target_label}.
 """ + get_language_instruction()
 
-        response = llm.invoke(prompt)
+        content = cached_blocks(llm, (role_and_resources, True), (debate_state, False))
+        response = llm.invoke([HumanMessage(content=content)])
 
         argument = f"Bear Analyst: {response.content}"
 

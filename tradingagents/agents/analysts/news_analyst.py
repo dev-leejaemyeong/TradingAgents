@@ -1,4 +1,4 @@
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import SystemMessage
 
 from tradingagents.agents.utils.agent_utils import (
     get_global_news,
@@ -8,6 +8,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_news,
     get_prediction_markets,
 )
+from tradingagents.agents.utils.prompt_caching import cached_blocks
 
 
 def create_news_analyst(llm):
@@ -30,31 +31,35 @@ def create_news_analyst(llm):
             + get_language_instruction()
         )
 
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "You are a helpful AI assistant, collaborating with other assistants."
-                    " Use the provided tools to progress towards answering the question."
-                    " If you are unable to fully answer, that's OK; another assistant with different tools"
-                    " will help where you left off. Execute what you can to make progress."
-                    " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
-                    " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
-                    " You have access to the following tools: {tool_names}."
-                    " Today's date is {current_date}; treat it as 'now' for all analysis and tool-call date ranges. {instrument_context}\n"
-                    "{system_message}",
-                ),
-                MessagesPlaceholder(variable_name="messages"),
-            ]
+        tool_names = ", ".join(tool.name for tool in tools)
+        # See prompt_caching.py: stable content first so a cache hit is possible
+        # at all. role/tool boilerplate + this node's instructions are cached
+        # across every ticker in today's batch; the date is cached across that
+        # same batch; instrument_context is unique per ticker and stays last/uncached.
+        role_and_instructions = (
+            "You are a helpful AI assistant, collaborating with other assistants."
+            " Use the provided tools to progress towards answering the question."
+            " If you are unable to fully answer, that's OK; another assistant with different tools"
+            " will help where you left off. Execute what you can to make progress."
+            " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
+            " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
+            f" You have access to the following tools: {tool_names}.\n"
+            + system_message
         )
+        run_date = (
+            f" Today's date is {current_date}; treat it as 'now' for all analysis and tool-call date ranges.\n"
+        )
+        per_ticker = f" {instrument_context}\n"
 
-        prompt = prompt.partial(system_message=system_message)
-        prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
-        prompt = prompt.partial(current_date=current_date)
-        prompt = prompt.partial(instrument_context=instrument_context)
+        content = cached_blocks(
+            llm,
+            (role_and_instructions, True),
+            (run_date, True),
+            (per_ticker, False),
+        )
+        messages = [SystemMessage(content=content), *state["messages"]]
 
-        chain = prompt | llm.bind_tools(tools)
-        result = chain.invoke(state["messages"])
+        result = llm.bind_tools(tools).invoke(messages)
 
         report = ""
 

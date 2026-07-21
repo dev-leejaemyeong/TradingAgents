@@ -1,7 +1,10 @@
+from langchain_core.messages import HumanMessage
+
 from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
 )
+from tradingagents.agents.utils.prompt_caching import cached_blocks
 
 
 def create_bull_researcher(llm):
@@ -24,7 +27,10 @@ def create_bull_researcher(llm):
             else "Asset fundamentals report (may be unavailable for crypto)"
         )
 
-        prompt = f"""You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
+        # See prompt_caching.py: role instructions + this run's reports repeat
+        # unchanged on every bull/bear turn of this debate, so they're cached;
+        # history/current_response grow each turn and stay uncached and last.
+        role_and_resources = f"""You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
 
 Key points to focus on:
 - Growth Potential: Highlight the company's market opportunities, revenue projections, and scalability.
@@ -39,12 +45,14 @@ Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
 {fundamentals_label}: {fundamentals_report}
-Conversation history of the debate: {history}
+"""
+        debate_state = f"""Conversation history of the debate: {history}
 Last bear argument: {current_response}
 Use this information to deliver a compelling bull argument, refute the bear's concerns, and engage in a dynamic debate that demonstrates the strengths of the bull position.
 """ + get_language_instruction()
 
-        response = llm.invoke(prompt)
+        content = cached_blocks(llm, (role_and_resources, True), (debate_state, False))
+        response = llm.invoke([HumanMessage(content=content)])
 
         argument = f"Bull Analyst: {response.content}"
 

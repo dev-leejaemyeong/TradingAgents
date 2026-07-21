@@ -26,8 +26,7 @@ See: https://github.com/TauricResearch/TradingAgents/issues/796
 
 from datetime import datetime, timedelta
 
-from langchain_core.messages import AIMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import AIMessage, SystemMessage
 
 from tradingagents.agents.schemas import SentimentReport, render_sentiment_report
 from tradingagents.agents.utils.agent_utils import (
@@ -35,6 +34,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_language_instruction,
     get_news,
 )
+from tradingagents.agents.utils.prompt_caching import cached_blocks
 from tradingagents.agents.utils.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
@@ -71,7 +71,8 @@ def create_sentiment_analyst(llm):
         stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
         reddit_block = fetch_reddit_posts(ticker)
 
-        system_message = _build_system_message(
+        analysis_instructions = _build_analysis_instructions()
+        ticker_data = _build_ticker_data_block(
             ticker=ticker,
             start_date=start_date,
             end_date=end_date,
@@ -80,32 +81,28 @@ def create_sentiment_analyst(llm):
             reddit_block=reddit_block,
         )
 
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "You are a helpful AI assistant, collaborating with other assistants."
-                    " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
-                    " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
-                    # No tool-calling here: the data is pre-fetched into the
-                    # prompt, so tool-range wording would only invite a
-                    # hallucinated tool call (#1130).
-                    " Today's date is {current_date}; treat it as 'now' for all analysis. {instrument_context}"
-                    " " + NO_EXTERNAL_TOOLS +
-                    "\n{system_message}",
-                ),
-                MessagesPlaceholder(variable_name="messages"),
-            ]
+        # See prompt_caching.py: the role preamble + analysis instructions are
+        # identical for every ticker in today's batch and cached; the date is
+        # cached across that same batch; the per-ticker data (news/StockTwits/
+        # Reddit) is unique every call and stays last/uncached. No tool-calling
+        # here: the data is pre-fetched into the prompt, so tool-range wording
+        # would only invite a hallucinated tool call (#1130).
+        role_and_instructions = (
+            "You are a helpful AI assistant, collaborating with other assistants."
+            " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
+            " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
+            " " + NO_EXTERNAL_TOOLS + "\n" + analysis_instructions
         )
+        run_date = f" Today's date is {end_date}; treat it as 'now' for all analysis.\n"
+        per_ticker = f" {instrument_context}\n{ticker_data}"
 
-        prompt = prompt.partial(system_message=system_message)
-        prompt = prompt.partial(current_date=end_date)
-        prompt = prompt.partial(instrument_context=instrument_context)
-
-        # Format the template into a concrete message list so the structured
-        # and free-text paths receive the same input. No bind_tools — the
-        # data is already in the prompt.
-        formatted_messages = prompt.format_messages(messages=state["messages"])
+        content = cached_blocks(
+            llm,
+            (role_and_instructions, True),
+            (run_date, True),
+            (per_ticker, False),
+        )
+        formatted_messages = [SystemMessage(content=content), *state["messages"]]
 
         report_text = invoke_structured_or_freetext(
             structured_llm,
@@ -123,40 +120,11 @@ def create_sentiment_analyst(llm):
     return sentiment_analyst_node
 
 
-def _build_system_message(
-    *,
-    ticker: str,
-    start_date: str,
-    end_date: str,
-    news_block: str,
-    stocktwits_block: str,
-    reddit_block: str,
-) -> str:
-    """Assemble the sentiment-analyst system message with structured data blocks."""
-    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
-
-## Data sources (pre-fetched, in this prompt)
-
-### News headlines — Yahoo Finance, past 7 days
-Institutional framing. Fact-driven, slower-moving signal.
-
-<start_of_news>
-{news_block}
-<end_of_news>
-
-### StockTwits messages — retail-trader social platform indexed by cashtag
-Fast-moving signal. Each message carries a user-labeled sentiment tag (Bullish / Bearish / no-label) plus the message body.
-
-<start_of_stocktwits>
-{stocktwits_block}
-<end_of_stocktwits>
-
-### Reddit posts — r/wallstreetbets, r/stocks, r/investing (past 7 days)
-Community discussion. Engagement signal via upvote score and comment count. Subreddit character matters (r/wallstreetbets is often contrarian/exuberant; r/stocks more measured; r/investing longer-term).
-
-<start_of_reddit>
-{reddit_block}
-<end_of_reddit>
+def _build_analysis_instructions() -> str:
+    """Generic sentiment-analysis instructions, identical for every ticker —
+    kept separate from the per-ticker data block (see ``_build_ticker_data_block``)
+    so this half of the prompt is cache-eligible across a whole day's batch."""
+    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report drawing on three complementary data sources that will be provided to you: news headlines, StockTwits messages, and Reddit posts, each covering the past 7 days for a specific ticker.
 
 ## How to analyze this data (best practices)
 
@@ -186,6 +154,44 @@ Fill the following fields:
 - **narrative**: Full source-by-source breakdown, divergences, dominant narrative themes, catalysts and risks, and a markdown summary table of key sentiment signals (direction, source, supporting evidence).
 
 {get_language_instruction()}"""
+
+
+def _build_ticker_data_block(
+    *,
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    news_block: str,
+    stocktwits_block: str,
+    reddit_block: str,
+) -> str:
+    """Assemble the per-ticker pre-fetched data block. Unique every call
+    (different ticker/date/content), so this is never cache-eligible — see
+    ``_build_analysis_instructions`` for the half of the prompt that is."""
+    return f"""Produce the sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on the three data sources below.
+
+## Data sources (pre-fetched, in this prompt)
+
+### News headlines — Yahoo Finance, past 7 days
+Institutional framing. Fact-driven, slower-moving signal.
+
+<start_of_news>
+{news_block}
+<end_of_news>
+
+### StockTwits messages — retail-trader social platform indexed by cashtag
+Fast-moving signal. Each message carries a user-labeled sentiment tag (Bullish / Bearish / no-label) plus the message body.
+
+<start_of_stocktwits>
+{stocktwits_block}
+<end_of_stocktwits>
+
+### Reddit posts — r/wallstreetbets, r/stocks, r/investing (past 7 days)
+Community discussion. Engagement signal via upvote score and comment count. Subreddit character matters (r/wallstreetbets is often contrarian/exuberant; r/stocks more measured; r/investing longer-term).
+
+<start_of_reddit>
+{reddit_block}
+<end_of_reddit>"""
 
 
 # ---------------------------------------------------------------------------
