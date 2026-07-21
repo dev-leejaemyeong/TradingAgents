@@ -113,6 +113,7 @@ class TradingAgentsGraph:
 
         self.deep_thinking_llm = deep_client.get_llm()
         self.quick_thinking_llm = quick_client.get_llm()
+        self.node_llms = self._build_node_llms()
 
         self.memory_log = TradingMemoryLog(self.config)
 
@@ -129,6 +130,7 @@ class TradingAgentsGraph:
             self.deep_thinking_llm,
             self.tool_nodes,
             self.conditional_logic,
+            node_llms=self.node_llms,
         )
 
         self.propagator = Propagator(
@@ -150,40 +152,95 @@ class TradingAgentsGraph:
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
 
-    def _get_provider_kwargs(self) -> dict[str, Any]:
-        """Get provider-specific kwargs for LLM client creation."""
-        kwargs = {}
-        provider = self.config.get("llm_provider", "").lower()
+    def _get_provider_kwargs(
+        self, provider: str | None = None, overrides: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Get provider-specific kwargs for LLM client creation.
 
-        if provider == "google":
-            thinking_level = self.config.get("google_thinking_level")
+        ``provider``/``overrides`` let a single node's config (e.g. a
+        ``node_llm_overrides`` entry) supply its own provider and knob values;
+        any key absent from ``overrides`` falls back to the global config, so
+        a per-node override only needs to specify what differs. Called with no
+        arguments (the original signature), behavior is unchanged: everything
+        comes from ``self.config`` under the global ``llm_provider``.
+        """
+        overrides = overrides or {}
+        resolved_provider = (provider or self.config.get("llm_provider", "")).lower()
+
+        def _get(key: str):
+            if key in overrides:
+                return overrides[key]
+            return self.config.get(key)
+
+        kwargs = {}
+
+        if resolved_provider == "google":
+            thinking_level = _get("google_thinking_level")
             if thinking_level:
                 kwargs["thinking_level"] = thinking_level
 
-        elif provider == "openai":
-            reasoning_effort = self.config.get("openai_reasoning_effort")
+        elif resolved_provider == "openai":
+            reasoning_effort = _get("openai_reasoning_effort")
             if reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
 
-        elif provider == "anthropic":
-            effort = self.config.get("anthropic_effort")
+        elif resolved_provider == "anthropic":
+            effort = _get("anthropic_effort")
             if effort:
                 kwargs["effort"] = effort
 
         # Sampling temperature is cross-provider: forward it whenever set.
         # float() here so a value coming from a TRADINGAGENTS_TEMPERATURE env
         # string ("0.2") works the same as a programmatic float.
-        temperature = self.config.get("temperature")
+        temperature = _get("temperature")
         if temperature is not None and temperature != "":
             kwargs["temperature"] = float(temperature)
 
         # SDK retry budget is cross-provider. Forward it only when explicitly set
         # so each provider keeps its own default (usually 2) otherwise (#1091).
-        max_retries = self.config.get("llm_max_retries")
+        max_retries = _get("llm_max_retries")
         if max_retries is not None and max_retries != "":
             kwargs["max_retries"] = _coerce_max_retries(max_retries)
 
         return kwargs
+
+    def _build_node_llms(self) -> dict[str, Any]:
+        """Build per-node LLM overrides from ``config["node_llm_overrides"]``.
+
+        Each entry lets a single graph node (e.g. ``"bear_researcher"``) run on
+        a different vendor/model than the shared quick/deep tiers — needed to
+        mix vendors per role (e.g. Bull and Bear on different vendors to
+        reduce correlated bias). Nodes without an entry are simply absent from
+        the returned dict; ``GraphSetup`` falls back to the shared quick/deep
+        client for those, unchanged from before this existed. Identical
+        (provider, model, base_url, kwargs) overrides across nodes share one
+        underlying client instance.
+        """
+        overrides = self.config.get("node_llm_overrides") or {}
+        if not overrides:
+            return {}
+
+        client_cache: dict[tuple, Any] = {}
+        node_llms: dict[str, Any] = {}
+        for node_name, override in overrides.items():
+            provider = override.get("llm_provider", self.config["llm_provider"])
+            model = override["model"]
+            base_url = override.get("base_url", self.config.get("backend_url"))
+            kwargs = self._get_provider_kwargs(provider, override)
+            if self.callbacks:
+                kwargs = {**kwargs, "callbacks": self.callbacks}
+
+            cache_key = (
+                provider, model, base_url,
+                tuple(sorted((k, v) for k, v in kwargs.items() if k != "callbacks")),
+            )
+            if cache_key not in client_cache:
+                client_cache[cache_key] = create_llm_client(
+                    provider=provider, model=model, base_url=base_url, **kwargs,
+                ).get_llm()
+            node_llms[node_name] = client_cache[cache_key]
+
+        return node_llms
 
     def _create_tool_nodes(self) -> dict[str, ToolNode]:
         """Create tool nodes for different data sources using abstract methods."""

@@ -51,12 +51,26 @@ class GraphSetup:
         deep_thinking_llm: Any,
         tool_nodes: dict[str, ToolNode],
         conditional_logic: ConditionalLogic,
+        node_llms: dict[str, Any] | None = None,
     ):
-        """Initialize with required components."""
+        """Initialize with required components.
+
+        ``node_llms`` optionally maps a node name (see
+        ``default_config.DEFAULT_CONFIG["node_llm_overrides"]`` for the valid
+        set) to a specific LLM instance, overriding the shared quick/deep
+        tier for that one node. A node absent from the dict (the default,
+        empty-dict behavior) falls back to ``quick_thinking_llm`` /
+        ``deep_thinking_llm`` exactly as before this parameter existed.
+        """
         self.quick_thinking_llm = quick_thinking_llm
         self.deep_thinking_llm = deep_thinking_llm
         self.tool_nodes = tool_nodes
         self.conditional_logic = conditional_logic
+        self.node_llms = node_llms or {}
+
+    def _llm_for(self, node_name: str, default: Any) -> Any:
+        """Return the overridden LLM for ``node_name``, or ``default`` if none was set."""
+        return self.node_llms.get(node_name, default)
 
     def setup_graph(
         self, selected_analysts=("market", "social", "news", "fundamentals")
@@ -73,23 +87,45 @@ class GraphSetup:
         plan = build_analyst_execution_plan(selected_analysts)
 
         analyst_factories = {
-            "market": lambda: create_market_analyst(self.quick_thinking_llm),
-            "social": lambda: create_sentiment_analyst(self.quick_thinking_llm),
-            "news": lambda: create_news_analyst(self.quick_thinking_llm),
-            "fundamentals": lambda: create_fundamentals_analyst(self.quick_thinking_llm),
+            "market": lambda: create_market_analyst(
+                self._llm_for("market_analyst", self.quick_thinking_llm)
+            ),
+            "social": lambda: create_sentiment_analyst(
+                self._llm_for("sentiment_analyst", self.quick_thinking_llm)
+            ),
+            "news": lambda: create_news_analyst(
+                self._llm_for("news_analyst", self.quick_thinking_llm)
+            ),
+            "fundamentals": lambda: create_fundamentals_analyst(
+                self._llm_for("fundamentals_analyst", self.quick_thinking_llm)
+            ),
         }
 
         # Create researcher and manager nodes
-        bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
-        bear_researcher_node = create_bear_researcher(self.quick_thinking_llm)
-        research_manager_node = create_research_manager(self.deep_thinking_llm)
-        trader_node = create_trader(self.quick_thinking_llm)
+        bull_researcher_node = create_bull_researcher(
+            self._llm_for("bull_researcher", self.quick_thinking_llm)
+        )
+        bear_researcher_node = create_bear_researcher(
+            self._llm_for("bear_researcher", self.quick_thinking_llm)
+        )
+        research_manager_node = create_research_manager(
+            self._llm_for("research_manager", self.deep_thinking_llm)
+        )
+        trader_node = create_trader(self._llm_for("trader", self.quick_thinking_llm))
 
         # Create risk analysis nodes
-        aggressive_analyst = create_aggressive_debator(self.quick_thinking_llm)
-        neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
-        conservative_analyst = create_conservative_debator(self.quick_thinking_llm)
-        portfolio_manager_node = create_portfolio_manager(self.deep_thinking_llm)
+        aggressive_analyst = create_aggressive_debator(
+            self._llm_for("aggressive_analyst", self.quick_thinking_llm)
+        )
+        neutral_analyst = create_neutral_debator(
+            self._llm_for("neutral_analyst", self.quick_thinking_llm)
+        )
+        conservative_analyst = create_conservative_debator(
+            self._llm_for("conservative_analyst", self.quick_thinking_llm)
+        )
+        portfolio_manager_node = create_portfolio_manager(
+            self._llm_for("portfolio_manager", self.deep_thinking_llm)
+        )
 
         # Create workflow
         workflow = StateGraph(AgentState)

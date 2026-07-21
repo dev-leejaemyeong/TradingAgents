@@ -100,6 +100,17 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # provider/SDK at its own default (usually 2). Raise it to ride out bursty
     # 429 throttling on rate-limited deployments instead of aborting a run (#1091).
     "llm_max_retries": None,
+    # Per-node LLM overrides: {node_name: {"llm_provider": ..., "model": ...,
+    # optionally "base_url", "temperature", "llm_max_retries",
+    # "openai_reasoning_effort"/"google_thinking_level"/"anthropic_effort"}}.
+    # A node absent from this dict keeps using the shared quick/deep client
+    # for its tier, exactly like before this key existed. Valid node names:
+    # market_analyst, sentiment_analyst, news_analyst, fundamentals_analyst,
+    # bull_researcher, bear_researcher, research_manager, trader,
+    # aggressive_analyst, conservative_analyst, neutral_analyst,
+    # portfolio_manager. Lets e.g. Bull and Bear run on different vendors to
+    # reduce correlated bias, independent of the global quick/deep split.
+    "node_llm_overrides": {},
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
     "checkpoint_enabled": False,
