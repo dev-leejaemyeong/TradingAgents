@@ -5,14 +5,22 @@ Default path is Reddit's public Atom/RSS search feed
 (``/search.json``) is reliably WAF-blocked (``HTTP 403``) for public clients
 (issue #862), and probing it on every call only doubled our request volume
 against Reddit's per-IP rate limit — tripping ``429`` on the RSS fallback — so
-it is kept (``_fetch_subreddit_json``) but not used by default. On a 429 we back
-off once (honouring ``Retry-After``). RSS lacks score / comment counts, so those
-posts are marked and the formatter omits the metrics rather than printing fake
+it is kept (``_fetch_subreddit_json``) but not used by default. On a 429 we
+back off and retry up to twice (honouring ``Retry-After``), widened from a
+single retry 2026-07-29 after a real run still exhausted it on two
+subreddits back-to-back. RSS lacks score / comment counts, so those posts
+are marked and the formatter omits the metrics rather than printing fake
 zeros.
 
-No API key required. Returns formatted plaintext blocks ready for prompt
-injection and degrades gracefully — returns a placeholder string rather than
-raising, so callers never special-case missing data.
+No API key required (unauthenticated requests top out around 10/min per IP,
+vs. 100/min for an OAuth-registered app — see TODOS.md for the pending OAuth
+registration, which needs Reddit's 2-4 week manual approval). Returns
+formatted plaintext blocks ready for prompt injection and degrades
+gracefully — returns a placeholder string rather than raising, so callers
+never special-case missing data. A fetch that fails outright is worded as
+"data unavailable", distinct from a genuinely empty result — conflating the
+two previously let a rate-limited fetch read to the LLM as confirmed market
+silence (2026-07-29 finding).
 """
 
 from __future__ import annotations
@@ -95,14 +103,26 @@ def _fetch_subreddit_rss(
     sub: str,
     limit: int,
     timeout: float,
-    _retry: bool = True,
-) -> list[dict]:
+    attempts_left: int = 2,
+) -> list[dict] | None:
     """Default path: parse the public Atom search feed for a subreddit.
 
     Carries no score / comment counts, so those fields are left None and the
     post is tagged ``source="rss"`` for honest display. On a 429 (Reddit's
-    per-IP rate limit) we back off once — honouring ``Retry-After`` when
-    present — before giving up, so a transient burst doesn't blank the feed.
+    per-IP rate limit) we back off and retry — honouring ``Retry-After`` when
+    present — up to ``attempts_left`` additional times (2026-07-29: widened
+    from a single retry to two after a real run still hit consecutive 429s
+    on r/stocks and r/investing back-to-back, both exhausting the old
+    one-retry budget) before giving up, so a transient burst doesn't blank
+    the feed.
+
+    Returns ``None`` (not ``[]``) when every attempt failed -- distinct from
+    a request that genuinely succeeded and found zero matching posts.
+    Conflating the two (2026-07-29 finding) let a rate-limited fetch get
+    reported to the sentiment analyst as "no posts found", which it then
+    read as real market silence and folded into a bearish signal. Callers
+    (fetch_reddit_posts()) must preserve this distinction rather than
+    treating None like an empty list.
     """
     url = _RSS.format(sub=sub, qs=_search_qs(ticker, limit))
     req = Request(url, headers={"User-Agent": _UA})
@@ -110,21 +130,21 @@ def _fetch_subreddit_rss(
         with urlopen(req, timeout=timeout) as resp:
             root = ET.fromstring(resp.read())
     except HTTPError as exc:
-        if exc.code == 429 and _retry:
+        if exc.code == 429 and attempts_left > 0:
             wait = _retry_after_seconds(exc) or 5.0
             logger.warning(
-                "Reddit RSS 429 for r/%s · %s — backing off %.1fs then retrying once",
-                sub, ticker, wait,
+                "Reddit RSS 429 for r/%s · %s — backing off %.1fs then retrying (%d attempt(s) left)",
+                sub, ticker, wait, attempts_left,
             )
             time.sleep(wait)
-            return _fetch_subreddit_rss(ticker, sub, limit, timeout, _retry=False)
+            return _fetch_subreddit_rss(ticker, sub, limit, timeout, attempts_left=attempts_left - 1)
         logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
-        return []
+        return None
     except (OSError, http.client.HTTPException, ET.ParseError) as exc:
         # OSError covers URLError/TimeoutError/connection resets; HTTPException
         # covers chunked-transfer errors (IncompleteRead/BadStatusLine, #1024).
         logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
-        return []
+        return None
 
     posts = []
     for entry in root.findall("atom:entry", _ATOM_NS)[:limit]:
@@ -178,7 +198,7 @@ def _fetch_subreddit(
     sub: str,
     limit: int,
     timeout: float,
-) -> list[dict]:
+) -> list[dict] | None:
     """Fetch one subreddit, RSS-first.
 
     The JSON search endpoint is reliably WAF-blocked (403) for public clients,
@@ -193,7 +213,7 @@ def fetch_reddit_posts(
     subreddits: Iterable[str] = DEFAULT_SUBREDDITS,
     limit_per_sub: int = 5,
     timeout: float = 10.0,
-    inter_request_delay: float = 1.0,
+    inter_request_delay: float = 3.0,
 ) -> str:
     """Fetch recent Reddit posts mentioning ``ticker`` across finance
     subreddits and return them as a formatted plaintext block.
@@ -201,16 +221,38 @@ def fetch_reddit_posts(
     ``inter_request_delay`` paces the (now RSS-only) per-subreddit requests to
     stay under Reddit's public per-IP rate limit; combined with the RSS-first
     path it makes 429s rare even when several analyses run back-to-back.
+    Widened from 1.0s to 3.0s (2026-07-29) after a real run still hit 429s on
+    2 of 3 subreddits despite the old spacing -- unauthenticated Reddit
+    requests are capped around 10/min per IP, well below the 100/min OAuth
+    gets (TODOS.md item on registering an OAuth app, pending Reddit's 2-4
+    week manual approval).
+
+    A subreddit whose fetch fails outright (rate-limited or network error,
+    see _fetch_subreddit_rss()) is rendered as "<data unavailable>", never
+    silently folded into "<no posts found>" -- the latter previously read to
+    the sentiment analyst as confirmed market silence when it was actually
+    just a failed HTTP request (2026-07-29 finding).
     """
     # Crypto reaches us as a Yahoo pair (BTC-USD); search Reddit for the base
     # ("BTC") so the query actually matches discussion instead of near-nothing.
     ticker = crypto_base(ticker) or ticker
     blocks = []
     total_posts = 0
+    # Stays True only if every subreddit was actually queried successfully
+    # and came back with zero matching posts -- a single failed fetch must
+    # not let the aggregate fallback below claim confirmed silence.
+    all_empty_confirmed = True
     for i, sub in enumerate(subreddits):
         if i > 0:
             time.sleep(inter_request_delay)
         posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
+        if posts is None:
+            all_empty_confirmed = False
+            blocks.append(
+                f"r/{sub}: <data unavailable -- fetch failed (rate limit or network "
+                f"error), NOT evidence of an absence of {ticker.upper()} discussion>"
+            )
+            continue
         total_posts += len(posts)
         if not posts:
             blocks.append(f"r/{sub}: <no posts found mentioning {ticker.upper()} in the past 7 days>")
@@ -242,7 +284,11 @@ def fetch_reddit_posts(
             )
         blocks.append("\n".join(lines))
 
-    if total_posts == 0:
+    # Only collapse to the blanket "confirmed silence" message when every
+    # subreddit was actually queried successfully -- if any fetch failed,
+    # the per-subreddit blocks (which already distinguish "no posts found"
+    # from "data unavailable") carry the honest picture instead.
+    if total_posts == 0 and all_empty_confirmed:
         return (
             f"<no Reddit posts found mentioning {ticker.upper()} across "
             f"{', '.join(f'r/{s}' for s in subreddits)} in the past 7 days>"
