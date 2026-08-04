@@ -486,7 +486,7 @@ class TradingAgentsGraph:
             past_context=past_context,
             instrument_context=instrument_context,
         )
-        args = self.propagator.get_graph_args()
+        args = self.propagator.get_graph_args(callbacks=self.callbacks)
 
         # Inject thread_id so same ticker+date+graph-shape resumes; a different
         # date or graph shape starts fresh (#1089).
