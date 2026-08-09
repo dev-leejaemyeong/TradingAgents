@@ -83,3 +83,9 @@ class AgentState(MessagesState):
         "take_profit/position_size_usd checks.",
     ]
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]
+
+    # portfolio-scale context for the Portfolio Manager's position_size_usd
+    # (available_budget_usd is deliberately NOT included here -- see
+    # portfolio_manager.py's docstring)
+    total_capital_usd: Annotated[float | None, "Total portfolio capital, for the PM's equal-weight sizing baseline"]
+    max_positions: Annotated[int | None, "Configured max open positions, for the PM's equal-weight sizing baseline"]

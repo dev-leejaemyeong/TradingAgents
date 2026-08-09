@@ -22,6 +22,8 @@ class Propagator:
         asset_type: str = "stock",
         past_context: str = "",
         instrument_context: str = "",
+        total_capital_usd: float | None = None,
+        max_positions: int | None = None,
     ) -> dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -30,6 +32,11 @@ class Propagator:
         ``TradingAgentsGraph.resolve_instrument_context``). When empty, agents
         fall back to ticker-only context via
         ``get_instrument_context_from_state``.
+
+        ``total_capital_usd``/``max_positions``: portfolio-scale context for
+        the Portfolio Manager's equal-weight sizing baseline (office-hours
+        design session, 2026-08-08) -- see portfolio_manager.py's docstring
+        for why ``available_budget_usd`` is deliberately excluded here.
         """
         return {
             "messages": [("human", company_name)],
@@ -38,6 +45,8 @@ class Propagator:
             "instrument_context": instrument_context,
             "trade_date": str(trade_date),
             "past_context": past_context,
+            "total_capital_usd": total_capital_usd,
+            "max_positions": max_positions,
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",

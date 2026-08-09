@@ -10,6 +10,18 @@ needs the typed ``stop_loss``/``take_profit``/``position_size_usd`` fields,
 not a re-parse of the markdown.  When a provider does not expose structured
 output, the agent falls back gracefully to free-text generation and
 ``final_trade_decision_structured`` is ``None``.
+
+Sizing context (office-hours design session, 2026-08-08): the prompt tells
+the PM ``total_capital_usd``/``max_positions`` — a stable, order-independent
+equal-weight baseline (``total_capital_usd / max_positions``) it can scale up
+or down from based on conviction. ``available_budget_usd`` (today's actual
+remaining cash) is deliberately NOT included — it fluctuates candidate to
+candidate within a single run, and telling the PM a shrinking number risks
+it self-rationing against hypothetical future candidates it can't see,
+recreating the exact "divide what's left" distortion this design avoids.
+The real cash ceiling is still enforced, just downstream and silently by
+``position_sizer.clamp_to_budget()`` (orchestrator.py) — the PM's number is
+never trusted blindly regardless of what it's told.
 """
 
 from __future__ import annotations
@@ -44,6 +56,21 @@ def create_portfolio_manager(llm):
             else ""
         )
 
+        total_capital_usd = state.get("total_capital_usd")
+        max_positions = state.get("max_positions")
+        sizing_context_line = ""
+        if total_capital_usd and max_positions:
+            baseline_usd = total_capital_usd / max_positions
+            sizing_context_line = (
+                f"- Portfolio scale: total capital ${total_capital_usd:,.2f} across up to "
+                f"{max_positions} positions. Equal-weight baseline for an average-conviction "
+                f"Buy: ${baseline_usd:,.2f} — this is a reference point, not a fixed target. "
+                f"Size larger than this for stronger conviction, smaller for weaker conviction, "
+                f"at your discretion. (This baseline does not account for today's actual "
+                f"remaining cash — a downstream system enforces that limit separately, so size "
+                f"based on conviction, not on guessing what's left to spend.)\n"
+            )
+
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
 {instrument_context}
@@ -60,7 +87,7 @@ def create_portfolio_manager(llm):
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
-{lessons_line}
+{sizing_context_line}{lessons_line}
 **Risk Analysts Debate History:**
 {history}
 
