@@ -66,9 +66,12 @@ def create_portfolio_manager(llm):
                 f"{max_positions} positions. Equal-weight baseline for an average-conviction "
                 f"Buy: ${baseline_usd:,.2f} — this is a reference point, not a fixed target. "
                 f"Size larger than this for stronger conviction, smaller for weaker conviction, "
-                f"at your discretion. (This baseline does not account for today's actual "
-                f"remaining cash — a downstream system enforces that limit separately, so size "
-                f"based on conviction, not on guessing what's left to spend.)\n"
+                f"at your discretion — typically within roughly 0.5x-2x the baseline, and both "
+                f"directions should see real use, not just the downward one. A Buy rating implies "
+                f"real conviction: if the debate only supports a token-sized position, prefer Hold "
+                f"or Underweight over a Buy sized near zero. (This baseline does not account for "
+                f"today's actual remaining cash — a downstream system enforces that limit "
+                f"separately, so size based on conviction, not on guessing what's left to spend.)\n"
             )
 
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
