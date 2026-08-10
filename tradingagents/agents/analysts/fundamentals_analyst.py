@@ -1,6 +1,7 @@
 from langchain_core.messages import SystemMessage
 
 from tradingagents.agents.utils.agent_utils import (
+    TOOL_OUTPUT_INJECTION_GUARD,
     get_balance_sheet,
     get_cashflow,
     get_fundamentals,
@@ -44,6 +45,8 @@ def create_fundamentals_analyst(llm):
             " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
             " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
             f" You have access to the following tools: {tool_names}.\n"
+            + TOOL_OUTPUT_INJECTION_GUARD
+            + "\n"
             + system_message
         )
         run_date = (

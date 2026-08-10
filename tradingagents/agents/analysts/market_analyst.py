@@ -1,6 +1,7 @@
 from langchain_core.messages import SystemMessage
 
 from tradingagents.agents.utils.agent_utils import (
+    TOOL_OUTPUT_INJECTION_GUARD,
     get_indicators,
     get_instrument_context_from_state,
     get_language_instruction,
@@ -74,6 +75,8 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
             " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
             " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
             f" You have access to the following tools: {tool_names}.\n"
+            + TOOL_OUTPUT_INJECTION_GUARD
+            + "\n"
             + system_message
         )
         run_date = (
