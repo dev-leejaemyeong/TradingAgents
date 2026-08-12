@@ -36,6 +36,15 @@ def _coerce_optional_float(value):
     return value
 
 
+# Schema-level sanity ceiling on position_size_usd. This is not a real budget
+# constraint -- that is clamp_to_budget()'s job (position_sizer.py), which
+# knows the account's actual available cash at call time. This ceiling only
+# exists to reject an obviously malformed/garbage LLM value (e.g. a stray
+# exponent) before it reaches downstream code, so it is intentionally set far
+# above any plausible single-position size.
+_POSITION_SIZE_USD_SANITY_CEILING = 1_000_000.0
+
+
 # ---------------------------------------------------------------------------
 # Shared rating types
 # ---------------------------------------------------------------------------
@@ -138,10 +147,12 @@ class TraderProposal(BaseModel):
     )
     entry_price: float | None = Field(
         default=None,
+        gt=0,
         description="Optional entry price target in the instrument's quote currency.",
     )
     stop_loss: float | None = Field(
         default=None,
+        gt=0,
         description="Optional stop-loss price in the instrument's quote currency.",
     )
     position_sizing: str | None = Field(
@@ -222,6 +233,7 @@ class PortfolioDecision(BaseModel):
     )
     price_target: float | None = Field(
         default=None,
+        gt=0,
         description="Optional target price in the instrument's quote currency.",
     )
     time_horizon: str | None = Field(
@@ -230,6 +242,7 @@ class PortfolioDecision(BaseModel):
     )
     stop_loss: float | None = Field(
         default=None,
+        gt=0,
         description=(
             "The final stop-loss price in the instrument's quote currency. "
             "Consider the Trader's proposed stop-loss but decide the final "
@@ -238,6 +251,7 @@ class PortfolioDecision(BaseModel):
     )
     take_profit: float | None = Field(
         default=None,
+        gt=0,
         description=(
             "The final take-profit price in the instrument's quote currency, "
             "at which the position should be closed for a gain."
@@ -245,6 +259,8 @@ class PortfolioDecision(BaseModel):
     )
     position_size_usd: float | None = Field(
         default=None,
+        ge=0,
+        le=_POSITION_SIZE_USD_SANITY_CEILING,
         description=(
             "The final dollar amount to allocate to this position, no greater "
             "than the available buying-power figure stated in the prompt "
