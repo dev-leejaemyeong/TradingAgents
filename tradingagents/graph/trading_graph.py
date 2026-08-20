@@ -423,6 +423,7 @@ class TradingAgentsGraph:
         asset_type: str = "stock",
         total_capital_usd: float | None = None,
         max_positions: int | None = None,
+        extra_context: str = "",
     ):
         """Run the trading agents graph for a company on a specific date.
 
@@ -437,6 +438,14 @@ class TradingAgentsGraph:
         state for the Portfolio Manager's equal-weight sizing baseline
         (office-hours design session, 2026-08-08). Both default to None
         (existing callers unaffected) -- see portfolio_manager.py.
+
+        ``extra_context`` (2026-08-20 design session): caller-supplied facts
+        the memory log's own reflection mechanism can't produce -- e.g. why a
+        rejection-cache re-debate was triggered right now. Concatenated onto
+        ``past_context`` (below) rather than a separate state key, so the
+        Portfolio Manager (the only agent that reads ``past_context``,
+        portfolio_manager.py) sees it with no prompt-template change.
+        Defaults to "" (existing callers unaffected).
         """
         self.ticker = company_name
 
@@ -469,6 +478,7 @@ class TradingAgentsGraph:
                 asset_type=asset_type,
                 total_capital_usd=total_capital_usd,
                 max_positions=max_positions,
+                extra_context=extra_context,
             )
         finally:
             if self._checkpointer_ctx is not None:
@@ -498,11 +508,14 @@ class TradingAgentsGraph:
         asset_type: str = "stock",
         total_capital_usd: float | None = None,
         max_positions: int | None = None,
+        extra_context: str = "",
     ):
         """Execute the graph and write the resulting state to disk and memory log."""
         # Initialize state — inject memory log context for PM and the
         # deterministically resolved instrument identity for all agents.
         past_context = self.memory_log.get_past_context(company_name)
+        if extra_context:
+            past_context = f"{extra_context}\n\n{past_context}" if past_context else extra_context
         instrument_context = self.resolve_instrument_context(company_name, asset_type)
         init_agent_state = self.propagator.create_initial_state(
             company_name,

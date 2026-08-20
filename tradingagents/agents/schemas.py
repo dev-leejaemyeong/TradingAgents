@@ -267,11 +267,58 @@ class PortfolioDecision(BaseModel):
             "context, if one was given."
         ),
     )
+    rejection_category: (
+        Literal[
+            "valuation",
+            "momentum",
+            "quality",
+            "financial_risk",
+            "catalyst_missing",
+            "event_risk",
+            "data_insufficient",
+        ]
+        | None
+    ) = Field(
+        default=None,
+        description=(
+            "Only set when rating is Underweight or Sell: the single primary "
+            "reason for the negative rating, picked from the fixed category "
+            "list. 'valuation': price too rich relative to fundamentals. "
+            "'momentum': price/technical trend unfavorable. 'quality': weak "
+            "fundamentals (profitability, balance sheet quality). "
+            "'financial_risk': leverage/solvency concern. 'catalyst_missing': "
+            "no near-term reason for the price to move. 'event_risk': a "
+            "specific pending event (earnings, litigation, regulatory) makes "
+            "this too risky right now. 'data_insufficient': the available "
+            "analysis doesn't support a conviction call either way. Leave "
+            "unset for a Buy/Overweight/Hold rating."
+        ),
+    )
 
     @field_validator("price_target", "stop_loss", "take_profit", "position_size_usd", mode="before")
     @classmethod
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
+
+    @field_validator("rejection_category", mode="before")
+    @classmethod
+    def _invalid_rejection_category_to_none(cls, v):
+        # Same reasoning as _nullish_float_to_none (#1058): a weak LLM can
+        # write "None"/"N/A" (or any other stray text) into this field
+        # instead of omitting it. Unlike the float fields, this is a Literal
+        # enum -- any unrecognized string would otherwise raise a
+        # ValidationError and take down the ENTIRE structured PM response
+        # (rating/stop_loss/take_profit too), not just this field. Map
+        # anything that isn't one of the allowed categories to None instead
+        # of trusting the LLM's raw string.
+        if v is None:
+            return None
+        valid = {
+            "valuation", "momentum", "quality", "financial_risk",
+            "catalyst_missing", "event_risk", "data_insufficient",
+        }
+        normalized = v.strip().lower() if isinstance(v, str) else v
+        return normalized if normalized in valid else None
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -299,6 +346,8 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         parts.extend(["", f"**Take Profit**: {decision.take_profit}"])
     if decision.position_size_usd is not None:
         parts.extend(["", f"**Position Size**: ${decision.position_size_usd:,.2f}"])
+    if decision.rejection_category is not None:
+        parts.extend(["", f"**Rejection Category**: {decision.rejection_category}"])
     return "\n".join(parts)
 
 

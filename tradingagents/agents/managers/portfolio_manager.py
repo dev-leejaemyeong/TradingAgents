@@ -101,6 +101,11 @@ Set concrete stop_loss/take_profit/position_size_usd values — consider the
 Trader's proposal above but decide the final numbers yourself; these are the
 numbers that will actually be used to size and manage the position.
 
+If your rating is Underweight or Sell, set rejection_category to the single
+primary reason (see field description for the fixed category list) — this
+is used to explain the rejection to you again if this ticker comes back for
+re-review later.
+
 {NO_EXTERNAL_TOOLS}{get_language_instruction()}"""
 
         final_trade_decision, pm_decision = invoke_structured(

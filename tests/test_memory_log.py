@@ -798,6 +798,71 @@ class TestPortfolioManagerInjection:
         result = pm_node(_make_pm_state())
         assert result["final_trade_decision_structured"] is None
 
+    def test_pm_decision_accepts_rejection_category(self):
+        decision = PortfolioDecision(
+            rating=PortfolioRating.SELL,
+            executive_summary="s",
+            investment_thesis="t",
+            rejection_category="valuation",
+        )
+        assert decision.rejection_category == "valuation"
+
+    def test_pm_decision_rejection_category_defaults_to_none(self):
+        decision = PortfolioDecision(rating=PortfolioRating.HOLD, executive_summary="s", investment_thesis="t")
+        assert decision.rejection_category is None
+
+    def test_pm_decision_coerces_unrecognized_rejection_category_to_none(self):
+        # An unrecognized/garbage value must not raise -- that would take
+        # down the entire structured PM call (rating/stop_loss/take_profit
+        # too), not just this field. Same posture as the nullish-float
+        # coercion below (#1058).
+        decision = PortfolioDecision(
+            rating=PortfolioRating.SELL,
+            executive_summary="s",
+            investment_thesis="t",
+            rejection_category="not_a_real_category",
+        )
+        assert decision.rejection_category is None
+
+    def test_pm_decision_coerces_nullish_rejection_category_string_to_none(self):
+        for sentinel in ("None", "N/A", "null", "", "TBD"):
+            decision = PortfolioDecision(
+                rating=PortfolioRating.HOLD,
+                executive_summary="s",
+                investment_thesis="t",
+                rejection_category=sentinel,
+            )
+            assert decision.rejection_category is None
+
+    def test_pm_decision_rejection_category_is_case_insensitive(self):
+        decision = PortfolioDecision(
+            rating=PortfolioRating.SELL,
+            executive_summary="s",
+            investment_thesis="t",
+            rejection_category="Valuation",
+        )
+        assert decision.rejection_category == "valuation"
+
+    def test_render_includes_rejection_category_when_present(self):
+        captured = {}
+        decision = PortfolioDecision(
+            rating=PortfolioRating.UNDERWEIGHT,
+            executive_summary="Trim exposure.",
+            investment_thesis="Valuation stretched relative to peers.",
+            rejection_category="valuation",
+        )
+        llm = _structured_pm_llm(captured, decision)
+        pm_node = create_portfolio_manager(llm)
+        md = pm_node(_make_pm_state())["final_trade_decision"]
+        assert "**Rejection Category**: valuation" in md
+
+    def test_render_omits_rejection_category_when_absent(self):
+        captured = {}
+        llm = _structured_pm_llm(captured)  # default decision leaves it unset
+        pm_node = create_portfolio_manager(llm)
+        md = pm_node(_make_pm_state())["final_trade_decision"]
+        assert "Rejection Category" not in md
+
     def test_pm_prompt_instructs_concrete_execution_numbers(self):
         """The prompt body must ask for stop_loss/take_profit/position_size_usd
         explicitly, not rely on the schema field descriptions alone, since the
@@ -939,3 +1004,59 @@ class TestLegacyRemoval:
         assert len(entries) == 1
         assert entries[0]["ticker"] == "NVDA"
         assert entries[0]["pending"] is True
+
+    def _propagate_and_capture_initial_state(self, tmp_path, *, extra_context="", memory_log=None):
+        """Same mock_graph/_run_graph-binding pattern as
+        test_full_pipeline_no_regression, but returns the kwargs
+        create_initial_state() was called with so a test can inspect
+        past_context directly."""
+        import functools
+
+        fake_state = {
+            "final_trade_decision": "Rating: Hold\nNo edge.",
+            "company_of_interest": "NVDA",
+            "trade_date": "2026-01-10",
+            "market_report": "", "sentiment_report": "", "news_report": "", "fundamentals_report": "",
+            "investment_debate_state": {
+                "bull_history": "", "bear_history": "", "history": "",
+                "current_response": "", "judge_decision": "",
+            },
+            "investment_plan": "", "trader_investment_plan": "",
+            "risk_debate_state": {
+                "aggressive_history": "", "conservative_history": "",
+                "neutral_history": "", "history": "", "judge_decision": "",
+                "current_aggressive_response": "", "current_conservative_response": "",
+                "current_neutral_response": "", "count": 1, "latest_speaker": "",
+            },
+        }
+        mock_graph = MagicMock()
+        mock_graph.memory_log = memory_log or TradingMemoryLog({"memory_log_path": str(tmp_path / "mem.md")})
+        mock_graph.log_states_dict = {}
+        mock_graph.debug = False
+        mock_graph.config = {"results_dir": str(tmp_path)}
+        mock_graph.graph.invoke.return_value = fake_state
+        mock_graph.propagator.create_initial_state.return_value = fake_state
+        mock_graph.propagator.get_graph_args.return_value = {}
+        mock_graph.signal_processor.process_signal.return_value = "Hold"
+        mock_graph._run_graph = functools.partial(TradingAgentsGraph._run_graph, mock_graph)
+        TradingAgentsGraph.propagate(mock_graph, "NVDA", "2026-01-10", extra_context=extra_context)
+        return mock_graph.propagator.create_initial_state.call_args.kwargs
+
+    def test_extra_context_becomes_past_context_when_memory_log_is_empty(self, tmp_path):
+        kwargs = self._propagate_and_capture_initial_state(
+            tmp_path, extra_context="Rejected 2026-07-20, composite 1.0 -> 3.0."
+        )
+        assert kwargs["past_context"] == "Rejected 2026-07-20, composite 1.0 -> 3.0."
+
+    def test_no_extra_context_leaves_past_context_from_memory_log_only(self, tmp_path):
+        kwargs = self._propagate_and_capture_initial_state(tmp_path, extra_context="")
+        assert kwargs["past_context"] == ""
+
+    def test_extra_context_is_prepended_before_existing_memory_log_context(self, tmp_path):
+        memory_log = TradingMemoryLog({"memory_log_path": str(tmp_path / "mem.md")})
+        _seed_completed(tmp_path, "NVDA", "2026-01-05", DECISION_BUY, "Great call.", filename="mem.md")
+        kwargs = self._propagate_and_capture_initial_state(
+            tmp_path, extra_context="Rejection cache trigger info.", memory_log=memory_log
+        )
+        assert kwargs["past_context"].startswith("Rejection cache trigger info.")
+        assert "Great call." in kwargs["past_context"]
