@@ -8,7 +8,9 @@ these (or a thin vendor-named subclass) and needs no new ``except`` clause.
     VendorError
     ├── NoMarketDataError          no usable rows (empty result OR stale data)
     ├── VendorRateLimitError       transient throttle -> skip to next vendor
-    └── VendorNotConfiguredError   missing API key/config -> vendor unavailable
+    ├── VendorNotConfiguredError   missing API key/config -> vendor unavailable
+    └── VendorNotEntitledError     valid key, but plan doesn't cover this endpoint
+                                    -> skip to next vendor (permanent, not transient)
 
 The number of types is the number of distinct router reactions, not the number
 of human-describable causes: empty and stale data get identical handling, so
@@ -52,4 +54,16 @@ class VendorNotConfiguredError(VendorError, ValueError):
 
     Also a ``ValueError`` so existing callers that catch ``ValueError`` keep
     working while the routing layer can treat it as "vendor unavailable".
+    """
+
+
+class VendorNotEntitledError(VendorError):
+    """The API key is valid, but this endpoint needs a plan the key doesn't have.
+
+    Distinct from ``VendorRateLimitError``: a rate limit is transient (the
+    same vendor may work on the next call, or after a cooldown), while an
+    entitlement gap is permanent for this key -- retrying never helps. The
+    router still reacts the same way today (skip to the next configured
+    vendor), but keeping the type separate stops a permanent "needs a paid
+    plan" condition from being logged/reasoned about as a transient throttle.
     """

@@ -145,9 +145,15 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
         "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
         "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        # alpha_vantage first (structured NEWS_SENTIMENT: relevance + Bullish/
+        # Bearish score per article, TODOS.md #86), yfinance as the fallback --
+        # a rate limit or entitlement gap on alpha_vantage falls through
+        # automatically (route_to_vendor's VendorRateLimitError/
+        # VendorNotEntitledError handling), never a hard failure.
+        "news_data": "alpha_vantage,yfinance",  # Options: alpha_vantage, yfinance
         "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
         "prediction_markets": "polymarket",  # Options: polymarket (keyless)
+        "earnings_calendar": "alpha_vantage",  # Options: alpha_vantage (TODOS.md #89)
     },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {

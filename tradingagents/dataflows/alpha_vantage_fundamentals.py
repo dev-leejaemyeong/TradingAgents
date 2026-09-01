@@ -62,3 +62,77 @@ def get_income_statement(ticker: str, freq: str = "quarterly", curr_date: str = 
     result = _make_api_request("INCOME_STATEMENT", {"symbol": ticker})
     return _filter_reports_by_date(result, curr_date)
 
+
+def get_earnings_calendar(symbol: str, horizon: str = "3month") -> str:
+    """Next scheduled earnings report date and consensus EPS estimate.
+
+    TODOS.md #89: forward-looking (the next NOT-yet-reported date), distinct
+    from ``get_income_statement()``/``get_recent_negative_earnings_surprise()``
+    (already-reported results) -- context only, not a hard gate, so an
+    analyst can flag "position entry lands right before an earnings report"
+    as a risk factor without the system automatically excluding/resizing
+    anything on it (no backtested evidence yet that doing so helps).
+
+    Args:
+        symbol: Ticker symbol.
+        horizon: How far forward to look: "3month" (default), "6month", or "12month".
+
+    Returns:
+        CSV: symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay
+        -- already scoped to this one symbol by Alpha Vantage.
+    """
+    return _make_api_request(
+        "EARNINGS_CALENDAR", {"symbol": symbol, "horizon": horizon}
+    )
+
+
+def get_recent_negative_earnings_surprise(symbol: str, lookback_days: int = 30) -> float | None:
+    """The surprise fraction if the most recent past earnings report (within
+    ``lookback_days`` of now) had a negative surprise, else None.
+
+    Alpha Vantage EARNINGS fallback for screener.py's
+    ``recent_negative_earnings_surprise()`` (TODOS.md #87) -- mirrors that
+    function's exact contract (float|None, negative-only, "no surprise" and
+    "any failure" both collapse to None) so callers can't tell which vendor
+    answered. ``quarterlyEarnings`` is already sorted most-recent-first, so
+    the first entry that has actually been reported (``reportedDate`` not in
+    the future) settles the answer -- if it's older than the lookback
+    window, nothing newer qualifies either.
+
+    Args:
+        symbol: Ticker symbol.
+        lookback_days: Only consider a report dated within this many days of now.
+
+    Returns:
+        The surprise fraction (e.g. -0.065 for a 6.5% miss), or None.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        payload = json.loads(_make_api_request("EARNINGS", {"symbol": symbol}))
+        quarterly = payload.get("quarterlyEarnings") or []
+    except Exception:  # noqa: BLE001 - fallback path; caller treats any failure as "no surprise"
+        return None
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=lookback_days)
+    for report in quarterly:
+        reported_date_str = report.get("reportedDate")
+        if not reported_date_str:
+            continue
+        try:
+            reported_date = datetime.strptime(reported_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if reported_date > now:
+            continue  # not yet actually reported -- keep looking for a real one
+        if reported_date < cutoff:
+            return None  # most-recent-first: nothing newer qualifies either
+        surprise_pct = report.get("surprisePercentage")
+        try:
+            surprise_pct = float(surprise_pct)
+        except (TypeError, ValueError):
+            return None
+        return surprise_pct / 100.0 if surprise_pct < 0 else None
+    return None
+

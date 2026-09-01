@@ -4,8 +4,10 @@ from tradingagents.agents.utils.agent_utils import (
     TOOL_OUTPUT_INJECTION_GUARD,
     get_balance_sheet,
     get_cashflow,
+    get_earnings_calendar,
     get_fundamentals,
     get_income_statement,
+    get_insider_transactions,
     get_instrument_context_from_state,
     get_language_instruction,
 )
@@ -22,13 +24,15 @@ def create_fundamentals_analyst(llm):
             get_balance_sheet,
             get_cashflow,
             get_income_statement,
+            get_insider_transactions,
+            get_earnings_calendar,
         ]
 
         system_message = (
             "You are a researcher tasked with analyzing fundamental information over the past week about a company. Please write a comprehensive report of the company's fundamental information such as financial documents, company profile, basic company financials, and company financial history to gain a full view of the company's fundamental information to inform traders. Make sure to include as much detail as possible. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."
             + " If a tool result contains a NO_DATA_AVAILABLE or DATA_UNAVAILABLE notice, or otherwise indicates missing or failed data, state that limitation explicitly in your report instead of writing around it -- never fabricate financial figures to fill the gap."
             + " Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."
-            + " Use the available tools: `get_fundamentals` for comprehensive company analysis, `get_balance_sheet`, `get_cashflow`, and `get_income_statement` for specific financial statements."
+            + " Use the available tools: `get_fundamentals` for comprehensive company analysis, `get_balance_sheet`, `get_cashflow`, and `get_income_statement` for specific financial statements, `get_insider_transactions` to check whether executives/insiders have been buying or selling -- note it as a supporting signal (e.g. sustained insider selling alongside weakening fundamentals, or insider buying alongside strength), not a standalone verdict -- and `get_earnings_calendar` to check the next scheduled earnings report date; if it falls soon after today, flag it explicitly as a near-term volatility/uncertainty risk for the trader to weigh (not a reason to auto-exclude)."
             + get_language_instruction()
         )
 

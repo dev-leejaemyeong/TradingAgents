@@ -1,9 +1,12 @@
 """Alpha Vantage request hardening.
 
 Regressions for #990 (no request timeout -> can hang), #991 (invalid-key
-responses mislabeled as rate limits and silently treated as transient), and
+responses mislabeled as rate limits and silently treated as transient),
 #1115 (fundamentals look-ahead filter never ran because the payload is a JSON
-string, not a dict).
+string, not a dict), and TODOS.md #86 (2026-08-31: a premium-endpoint
+response -- e.g. TIME_SERIES_DAILY_ADJUSTED without a paid plan -- was
+mislabeled as a rate limit, making a permanent entitlement gap look
+transient).
 """
 import json
 
@@ -11,6 +14,7 @@ import pytest
 
 import tradingagents.dataflows.alpha_vantage_common as av
 import tradingagents.dataflows.alpha_vantage_fundamentals as avf
+import tradingagents.dataflows.alpha_vantage_stock as avs
 
 
 class _FakeResponse:
@@ -59,6 +63,43 @@ def test_invalid_key_not_mislabeled_as_rate_limit(monkeypatch):
         av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
 
 
+@pytest.mark.unit
+def test_premium_endpoint_not_mislabeled_as_rate_limit(monkeypatch):
+    # TODOS.md #86 (2026-08-31 live probe against TIME_SERIES_DAILY_ADJUSTED):
+    # a premium-only endpoint is a permanent entitlement gap, not a transient
+    # throttle -- retrying (or an approved higher daily quota) never fixes it.
+    body = (
+        '{"Information": "Thank you for using Alpha Vantage! This is a premium '
+        'endpoint. You may subscribe to any of the premium plans at '
+        'https://www.alphavantage.co/premium/ to instantly unlock all premium '
+        'endpoints"}'
+    )
+    monkeypatch.setattr(av.requests, "get", _patched_get(body))
+    with pytest.raises(av.AlphaVantageNotEntitledError):
+        av._make_api_request("TIME_SERIES_DAILY_ADJUSTED", {"symbol": "AAPL"})
+
+
+@pytest.mark.unit
+def test_get_daily_close_parses_latest_row(monkeypatch):
+    # TODOS.md #90: entrypoint.fetch_current_prices()'s Alpha Vantage
+    # fallback -- TIME_SERIES_DAILY (free, unlike ADJUSTED) is CSV with the
+    # most recent row first.
+    body = (
+        "timestamp,open,high,low,close,volume\r\n"
+        "2026-08-31,319.5400,321.2350,312.8000,316.8500,41209669\r\n"
+        "2026-08-28,316.8450,322.3700,315.4504,319.7000,38649398\r\n"
+    )
+    monkeypatch.setattr(av.requests, "get", _patched_get(body))
+    assert avs.get_daily_close("AAPL") == 316.85
+
+
+@pytest.mark.unit
+def test_get_daily_close_raises_on_no_data_row(monkeypatch):
+    monkeypatch.setattr(av.requests, "get", _patched_get("timestamp,open,high,low,close,volume\r\n"))
+    with pytest.raises(ValueError, match="no data"):
+        avs.get_daily_close("BOGUS")
+
+
 _FUNDAMENTALS_JSON = json.dumps({
     "symbol": "AAPL",
     "annualReports": [
@@ -94,3 +135,83 @@ def test_fundamentals_no_curr_date_passes_through(monkeypatch):
 def test_fundamentals_non_json_body_unchanged(monkeypatch):
     monkeypatch.setattr(avf, "_make_api_request", lambda fn, params: "not-json")
     assert avf.get_cashflow("AAPL", curr_date="2024-01-01") == "not-json"
+
+
+def _earnings_payload(reports):
+    return json.dumps({"symbol": "AAPL", "quarterlyEarnings": reports})
+
+
+@pytest.mark.unit
+def test_get_recent_negative_earnings_surprise_returns_fraction(monkeypatch):
+    # TODOS.md #87: screener.py's Alpha Vantage fallback for a negative
+    # earnings surprise within the lookback window.
+    from datetime import datetime, timedelta, timezone
+    recent = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(
+        avf, "_make_api_request",
+        lambda fn, params: _earnings_payload([{"reportedDate": recent, "surprisePercentage": "-6.5"}]),
+    )
+    assert avf.get_recent_negative_earnings_surprise("AAPL") == pytest.approx(-0.065)
+
+
+@pytest.mark.unit
+def test_get_recent_negative_earnings_surprise_positive_surprise_is_none(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    recent = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(
+        avf, "_make_api_request",
+        lambda fn, params: _earnings_payload([{"reportedDate": recent, "surprisePercentage": "3.2"}]),
+    )
+    assert avf.get_recent_negative_earnings_surprise("AAPL") is None
+
+
+@pytest.mark.unit
+def test_get_recent_negative_earnings_surprise_outside_lookback_is_none(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    stale = (datetime.now(timezone.utc) - timedelta(days=200)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(
+        avf, "_make_api_request",
+        lambda fn, params: _earnings_payload([{"reportedDate": stale, "surprisePercentage": "-30.0"}]),
+    )
+    assert avf.get_recent_negative_earnings_surprise("AAPL", lookback_days=30) is None
+
+
+@pytest.mark.unit
+def test_get_recent_negative_earnings_surprise_skips_future_dated_report(monkeypatch):
+    # quarterlyEarnings can carry a not-yet-reported entry first; the
+    # fallback must skip forward to the actual most recent past report.
+    from datetime import datetime, timedelta, timezone
+    future = (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y-%m-%d")
+    recent = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d")
+    monkeypatch.setattr(
+        avf, "_make_api_request",
+        lambda fn, params: _earnings_payload([
+            {"reportedDate": future, "surprisePercentage": None},
+            {"reportedDate": recent, "surprisePercentage": "-1.1"},
+        ]),
+    )
+    assert avf.get_recent_negative_earnings_surprise("AAPL") == pytest.approx(-0.011)
+
+
+@pytest.mark.unit
+def test_get_recent_negative_earnings_surprise_no_data_is_none(monkeypatch):
+    monkeypatch.setattr(avf, "_make_api_request", lambda fn, params: "not-json")
+    assert avf.get_recent_negative_earnings_surprise("BOGUS") is None
+
+
+@pytest.mark.unit
+def test_get_earnings_calendar_passes_through_and_scopes_horizon(monkeypatch):
+    # TODOS.md #89: forward-looking next report date, distinct from the
+    # already-reported EARNINGS data above.
+    captured = {}
+
+    def _fake_request(fn, params):
+        captured["fn"] = fn
+        captured["params"] = params
+        return "symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay\r\nAAPL,APPLE INC,2026-10-29,2026-09-30,1.98,USD,\r\n"
+
+    monkeypatch.setattr(avf, "_make_api_request", _fake_request)
+    result = avf.get_earnings_calendar("AAPL", horizon="6month")
+    assert "2026-10-29" in result
+    assert captured["fn"] == "EARNINGS_CALENDAR"
+    assert captured["params"] == {"symbol": "AAPL", "horizon": "6month"}

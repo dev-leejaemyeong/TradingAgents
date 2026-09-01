@@ -15,6 +15,7 @@ import tradingagents.dataflows.config as config_module
 import tradingagents.default_config as default_config
 from tradingagents.dataflows import interface
 from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.errors import VendorNotEntitledError
 from tradingagents.dataflows.symbol_utils import NoMarketDataError
 
 
@@ -109,6 +110,35 @@ class VendorRoutingTests(unittest.TestCase):
             result = interface.route_to_vendor("get_macro_indicators", "cpi", "2026-01-01")
         self.assertIn("DATA_UNAVAILABLE", result)
         self.assertIn("macro_data", result)
+
+    def test_not_entitled_falls_back_within_chain(self):
+        # TODOS.md #86 (2026-08-31): news_data's default chain is now
+        # "alpha_vantage,yfinance" -- a plan-restricted alpha_vantage endpoint
+        # (VendorNotEntitledError, e.g. a premium-only response) must fall
+        # through to yfinance, same as a rate limit does.
+        set_config({"data_vendors": {"news_data": "alpha_vantage,yfinance"}})
+        with self._route_method(
+            "get_news",
+            {
+                "alpha_vantage": _raises(VendorNotEntitledError("premium endpoint")),
+                "yfinance": _returns("YF_NEWS"),
+            },
+        ):
+            result = interface.route_to_vendor("get_news", "AAPL", "2026-01-01", "2026-01-10")
+        self.assertEqual(result, "YF_NEWS")
+
+    def test_earnings_calendar_degrades_instead_of_raising(self):
+        # TODOS.md #89: earnings_calendar is optional-enrichment (single
+        # alpha_vantage vendor, no yfinance equivalent) -- a failure must
+        # degrade to a sentinel, not abort the fundamentals analyst turn.
+        set_config({"data_vendors": {"earnings_calendar": "alpha_vantage"}})
+        with self._route_method(
+            "get_earnings_calendar",
+            {"alpha_vantage": _raises(ValueError("boom"))},
+        ):
+            result = interface.route_to_vendor("get_earnings_calendar", "AAPL", "3month")
+        assert "DATA_UNAVAILABLE" in result
+        assert "earnings_calendar" in result
 
     def test_core_category_still_raises_on_error(self):
         # A core category (single configured vendor) propagates the error so a

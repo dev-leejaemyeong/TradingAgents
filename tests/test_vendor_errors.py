@@ -13,6 +13,7 @@ import tradingagents.default_config as default_config
 from tradingagents.dataflows import interface
 from tradingagents.dataflows.alpha_vantage_common import (
     AlphaVantageNotConfiguredError,
+    AlphaVantageNotEntitledError,
     AlphaVantageRateLimitError,
 )
 from tradingagents.dataflows.config import set_config
@@ -20,6 +21,7 @@ from tradingagents.dataflows.errors import (
     NoMarketDataError,
     VendorError,
     VendorNotConfiguredError,
+    VendorNotEntitledError,
     VendorRateLimitError,
 )
 from tradingagents.dataflows.fred import FredNotConfiguredError
@@ -28,7 +30,7 @@ from tradingagents.dataflows.fred import FredNotConfiguredError
 @pytest.mark.unit
 class HierarchyTests(unittest.TestCase):
     def test_all_conditions_derive_from_vendor_error(self):
-        for cls in (NoMarketDataError, VendorRateLimitError, VendorNotConfiguredError):
+        for cls in (NoMarketDataError, VendorRateLimitError, VendorNotConfiguredError, VendorNotEntitledError):
             self.assertTrue(issubclass(cls, VendorError))
 
     def test_not_configured_is_still_a_value_error(self):
@@ -38,9 +40,16 @@ class HierarchyTests(unittest.TestCase):
     def test_vendor_named_errors_subclass_the_generic_bases(self):
         self.assertTrue(issubclass(AlphaVantageRateLimitError, VendorRateLimitError))
         self.assertTrue(issubclass(AlphaVantageNotConfiguredError, VendorNotConfiguredError))
+        self.assertTrue(issubclass(AlphaVantageNotEntitledError, VendorNotEntitledError))
         self.assertTrue(issubclass(FredNotConfiguredError, VendorNotConfiguredError))
         # ... and therefore still ValueErrors
         self.assertTrue(issubclass(FredNotConfiguredError, ValueError))
+
+    def test_not_entitled_is_distinct_from_rate_limit(self):
+        # A permanent plan restriction must not be caught by code that only
+        # expects a transient throttle (TODOS.md #86).
+        self.assertFalse(issubclass(VendorNotEntitledError, VendorRateLimitError))
+        self.assertFalse(issubclass(VendorRateLimitError, VendorNotEntitledError))
 
     def test_symbol_utils_reexports_no_market_data_error(self):
         from tradingagents.dataflows.symbol_utils import (

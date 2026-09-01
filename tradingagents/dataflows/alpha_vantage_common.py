@@ -6,7 +6,7 @@ from io import StringIO
 import pandas as pd
 import requests
 
-from .errors import VendorNotConfiguredError, VendorRateLimitError
+from .errors import VendorNotConfiguredError, VendorNotEntitledError, VendorRateLimitError
 
 API_BASE_URL = "https://www.alphavantage.co/query"
 
@@ -59,11 +59,25 @@ class AlphaVantageRateLimitError(VendorRateLimitError):
     """Raised when the Alpha Vantage API rate limit is exceeded."""
     pass
 
+
+class AlphaVantageNotEntitledError(VendorNotEntitledError):
+    """Raised when the endpoint requires a paid plan the current key lacks.
+
+    E.g. TIME_SERIES_DAILY_ADJUSTED responds "This is a premium endpoint"
+    regardless of the key's daily-request quota -- retrying, or even an
+    approved higher daily limit, never fixes this (2026-08-31 live probe:
+    confirmed against a key with the "trading_agents" source partnership).
+    Previously misclassified as ``AlphaVantageRateLimitError``, which made a
+    permanent plan restriction look like a transient throttle.
+    """
+    pass
+
 def _make_api_request(function_name: str, params: dict) -> dict | str:
     """Helper function to make API requests and handle responses.
 
     Raises:
         AlphaVantageRateLimitError: When API rate limit is exceeded
+        AlphaVantageNotEntitledError: When the endpoint needs a paid plan
     """
     # Create a copy of params to avoid modifying the original
     api_params = params.copy()
@@ -96,13 +110,21 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
         return response_text
 
     # Alpha Vantage reports problems via "Information" / "Note". Classify so a
-    # genuine rate limit and an invalid/missing key aren't conflated (#991):
-    # rate-limit phrasing is checked first because those notices also mention
-    # "API key" ("your API key ... 25 requests per day").
+    # genuine rate limit, an invalid/missing key, and a plan/entitlement gap
+    # aren't conflated (#991, and the premium-endpoint case found 2026-08-31):
+    # "premium" is checked first since a plan restriction is permanent for
+    # this key (retrying never helps), unlike the other two; rate-limit
+    # phrasing is checked next because those notices also mention "API key"
+    # ("your API key ... 25 requests per day").
     notice = response_json.get("Information") or response_json.get("Note")
     if notice:
         low = notice.lower()
-        if any(m in low for m in ("rate limit", "requests per day", "call frequency", "premium")):
+        if "premium" in low:
+            # E.g. TIME_SERIES_DAILY_ADJUSTED: "This is a premium endpoint."
+            # Distinct from a rate limit -- no cooldown or approved daily-quota
+            # increase makes this succeed; only a paid plan does.
+            raise AlphaVantageNotEntitledError(f"Alpha Vantage endpoint requires a paid plan: {notice}")
+        if any(m in low for m in ("rate limit", "requests per day", "call frequency")):
             raise AlphaVantageRateLimitError(f"Alpha Vantage rate limit exceeded: {notice}")
         if "api key" in low or "apikey" in low:
             # Reuse the existing "not configured" error so a bad key surfaces as

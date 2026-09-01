@@ -77,3 +77,22 @@ def get_income_statement(
         str: A formatted report containing income statement data
     """
     return route_to_vendor("get_income_statement", ticker, freq, curr_date)
+
+
+@tool
+def get_earnings_calendar(
+    ticker: Annotated[str, "ticker symbol"],
+    horizon: Annotated[str, "how far forward to look: '3month', '6month', or '12month'"] = "3month",
+) -> str:
+    """
+    Retrieve the next scheduled (not-yet-reported) earnings date and
+    consensus EPS estimate for a given ticker. Forward-looking only --
+    distinct from get_income_statement()'s already-reported results. Uses
+    the configured earnings_calendar vendor.
+    Args:
+        ticker (str): Ticker symbol of the company
+        horizon (str): How far forward to look: '3month' (default), '6month', or '12month'
+    Returns:
+        str: CSV with the next report date and consensus estimate
+    """
+    return route_to_vendor("get_earnings_calendar", ticker, horizon)

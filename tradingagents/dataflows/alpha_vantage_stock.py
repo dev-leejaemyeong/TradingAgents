@@ -38,3 +38,37 @@ def get_stock(
     response = _make_api_request("TIME_SERIES_DAILY_ADJUSTED", params)
 
     return _filter_csv_by_date_range(response, start_date, end_date)
+
+
+def get_daily_close(symbol: str) -> float:
+    """Latest daily close price via TIME_SERIES_DAILY (not ADJUSTED).
+
+    A lightweight, non-premium alternative to ``get_stock()``:
+    TIME_SERIES_DAILY_ADJUSTED requires a paid plan (TODOS.md #86, "This is
+    a premium endpoint" regardless of daily-request quota), while the plain
+    TIME_SERIES_DAILY is free. No history, no split/dividend adjustment --
+    just the single number entrypoint.fetch_current_prices() needs as its
+    Alpha Vantage fallback when yfinance fails a stop-loss/take-profit
+    price check (TODOS.md #90).
+
+    Args:
+        symbol: The ticker symbol.
+
+    Returns:
+        The most recent close price.
+
+    Raises:
+        ValueError: no parseable data row in the response.
+        AlphaVantageRateLimitError / AlphaVantageNotEntitledError /
+        AlphaVantageNotConfiguredError: propagated from ``_make_api_request``.
+    """
+    response = _make_api_request(
+        "TIME_SERIES_DAILY",
+        {"symbol": symbol, "outputsize": "compact", "datatype": "csv"},
+    )
+    # Header: timestamp,open,high,low,close,volume -- most recent row first.
+    lines = response.strip().splitlines()
+    if len(lines) < 2:
+        raise ValueError(f"Alpha Vantage TIME_SERIES_DAILY returned no data for {symbol!r}")
+    fields = lines[1].split(",")
+    return float(fields[4])

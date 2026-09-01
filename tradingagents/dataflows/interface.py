@@ -3,6 +3,7 @@ import logging
 from .alpha_vantage import (
     get_balance_sheet as get_alpha_vantage_balance_sheet,
     get_cashflow as get_alpha_vantage_cashflow,
+    get_earnings_calendar as get_alpha_vantage_earnings_calendar,
     get_fundamentals as get_alpha_vantage_fundamentals,
     get_global_news as get_alpha_vantage_global_news,
     get_income_statement as get_alpha_vantage_income_statement,
@@ -15,6 +16,7 @@ from .config import get_config
 from .errors import (
     NoMarketDataError,
     VendorNotConfiguredError,
+    VendorNotEntitledError,
     VendorRateLimitError,
 )
 from .fred import get_macro_data as get_fred_macro_data
@@ -74,6 +76,12 @@ TOOLS_CATEGORIES = {
         "tools": [
             "get_prediction_markets",
         ]
+    },
+    "earnings_calendar": {
+        "description": "Next scheduled earnings report date and consensus estimate",
+        "tools": [
+            "get_earnings_calendar",
+        ]
     }
 }
 
@@ -89,7 +97,7 @@ VENDOR_LIST = [
 # sentinel instead of aborting the run (a bad LLM-supplied indicator, a missing
 # key, or a network blip should not crash an analysis over flavour data). Core
 # categories (prices, fundamentals, news) still raise so a broken primary is loud.
-OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets"}
+OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets", "earnings_calendar"}
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
@@ -140,6 +148,10 @@ VENDOR_METHODS = {
     # prediction_markets
     "get_prediction_markets": {
         "polymarket": get_polymarket_prediction_markets,
+    },
+    # earnings_calendar
+    "get_earnings_calendar": {
+        "alpha_vantage": get_alpha_vantage_earnings_calendar,
     },
 }
 
@@ -202,6 +214,12 @@ def route_to_vendor(method: str, *args, **kwargs):
             return impl_func(*args, **kwargs)
         except VendorRateLimitError:
             logger.warning("Vendor %r rate-limited for %s; trying next vendor.", vendor, method)
+            continue
+        except VendorNotEntitledError:
+            logger.warning(
+                "Vendor %r not entitled (plan doesn't cover this endpoint) for %s; "
+                "trying next vendor.", vendor, method,
+            )
             continue
         except VendorNotConfiguredError as e:
             logger.warning("Vendor %r not configured for %s; trying next vendor.", vendor, method)
