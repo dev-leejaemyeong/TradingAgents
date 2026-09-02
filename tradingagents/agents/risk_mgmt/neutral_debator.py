@@ -7,7 +7,7 @@ from tradingagents.agents.utils.agent_utils import (
 from tradingagents.agents.utils.prompt_caching import cached_blocks
 
 
-def create_neutral_debator(llm):
+def create_neutral_debator(llm, cache_role_and_resources: bool = True):
     def neutral_node(state) -> dict:
         risk_debate_state = state["risk_debate_state"]
         history = risk_debate_state.get("history", "")
@@ -26,8 +26,14 @@ def create_neutral_debator(llm):
 
         # See prompt_caching.py: role instructions + trader's decision + this
         # run's reports repeat unchanged on every aggressive/conservative/
-        # neutral turn of this debate, so they're cached; the growing history
-        # and latest counter-arguments stay uncached and last.
+        # neutral turn of this debate -- but only WHEN there's more than one
+        # round to repeat on. With max_risk_discuss_rounds==1 (this project's
+        # production default) this node fires exactly once, so marking it
+        # cacheable would only ever pay the write premium with no later turn
+        # to read it back (confirmed via real A/B run, 2026-09-02). The
+        # caller (graph/setup.py) decides via cache_role_and_resources, from
+        # max_risk_discuss_rounds > 1. The growing history and latest
+        # counter-arguments stay uncached and last regardless.
         role_and_resources = f"""As the Neutral Risk Analyst, your role is to provide a balanced perspective, weighing both the potential benefits and risks of the trader's decision or plan. You prioritize a well-rounded approach, evaluating the upsides and downsides while factoring in broader market trends, potential economic shifts, and diversification strategies.Here is the trader's decision:
 
 {trader_decision}
@@ -44,7 +50,7 @@ Company Fundamentals Report: {fundamentals_report}
 
 Engage actively by analyzing both sides critically, addressing weaknesses in the aggressive and conservative arguments to advocate for a more balanced approach. Challenge each of their points to illustrate why a moderate risk strategy might offer the best of both worlds, providing growth potential while safeguarding against extreme volatility. Focus on debating rather than simply presenting data, aiming to show that a balanced view can lead to the most reliable outcomes. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
 
-        content = cached_blocks(llm, (role_and_resources, True), (debate_state, False))
+        content = cached_blocks(llm, (role_and_resources, cache_role_and_resources), (debate_state, False))
         response = llm.invoke([HumanMessage(content=content)])
 
         argument = f"Neutral Analyst: {response.content}"

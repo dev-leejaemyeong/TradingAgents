@@ -7,7 +7,7 @@ from tradingagents.agents.utils.agent_utils import (
 from tradingagents.agents.utils.prompt_caching import cached_blocks
 
 
-def create_bull_researcher(llm):
+def create_bull_researcher(llm, cache_role_and_resources: bool = True):
     def bull_node(state) -> dict:
         investment_debate_state = state["investment_debate_state"]
         history = investment_debate_state.get("history", "")
@@ -28,7 +28,14 @@ def create_bull_researcher(llm):
         )
 
         # See prompt_caching.py: role instructions + this run's reports repeat
-        # unchanged on every bull/bear turn of this debate, so they're cached;
+        # unchanged on every bull/bear turn of this debate -- but only WHEN
+        # there's more than one turn to repeat on. With max_debate_rounds==1
+        # (this project's production default) this node fires exactly once,
+        # so marking it cacheable would only ever pay the write premium with
+        # no later turn to read it back (confirmed via real A/B run,
+        # 2026-09-02: 3/3 tickers wrote ~18-19K tokens of cache, 0 ever
+        # read). The caller (graph/setup.py) decides via
+        # cache_role_and_resources, from max_debate_rounds > 1.
         # history/current_response grow each turn and stay uncached and last.
         role_and_resources = f"""You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
 
@@ -51,7 +58,7 @@ Last bear argument: {current_response}
 Use this information to deliver a compelling bull argument, refute the bear's concerns, and engage in a dynamic debate that demonstrates the strengths of the bull position.
 """ + get_language_instruction()
 
-        content = cached_blocks(llm, (role_and_resources, True), (debate_state, False))
+        content = cached_blocks(llm, (role_and_resources, cache_role_and_resources), (debate_state, False))
         response = llm.invoke([HumanMessage(content=content)])
 
         argument = f"Bull Analyst: {response.content}"

@@ -7,7 +7,7 @@ from tradingagents.agents.utils.agent_utils import (
 from tradingagents.agents.utils.prompt_caching import cached_blocks
 
 
-def create_aggressive_debator(llm):
+def create_aggressive_debator(llm, cache_role_and_resources: bool = True):
     def aggressive_node(state) -> dict:
         risk_debate_state = state["risk_debate_state"]
         history = risk_debate_state.get("history", "")
@@ -26,8 +26,14 @@ def create_aggressive_debator(llm):
 
         # See prompt_caching.py: role instructions + trader's decision + this
         # run's reports repeat unchanged on every aggressive/conservative/
-        # neutral turn of this debate, so they're cached; the growing history
-        # and latest counter-arguments stay uncached and last.
+        # neutral turn of this debate -- but only WHEN there's more than one
+        # round to repeat on. With max_risk_discuss_rounds==1 (this project's
+        # production default) this node fires exactly once, so marking it
+        # cacheable would only ever pay the write premium with no later turn
+        # to read it back (confirmed via real A/B run, 2026-09-02). The
+        # caller (graph/setup.py) decides via cache_role_and_resources, from
+        # max_risk_discuss_rounds > 1. The growing history and latest
+        # counter-arguments stay uncached and last regardless.
         role_and_resources = f"""As the Aggressive Risk Analyst, your role is to actively champion high-reward, high-risk opportunities, emphasizing bold strategies and competitive advantages. When evaluating the trader's decision or plan, focus intently on the potential upside, growth potential, and innovative benefits—even when these come with elevated risk. Use the provided market data and sentiment analysis to strengthen your arguments and challenge the opposing views. Specifically, respond directly to each point made by the conservative and neutral analysts, countering with data-driven rebuttals and persuasive reasoning. Highlight where their caution might miss critical opportunities or where their assumptions may be overly conservative. Here is the trader's decision:
 
 {trader_decision}
@@ -44,7 +50,7 @@ Company Fundamentals Report: {fundamentals_report}
 
 Engage actively by addressing any specific concerns raised, refuting the weaknesses in their logic, and asserting the benefits of risk-taking to outpace market norms. Maintain a focus on debating and persuading, not just presenting data. Challenge each counterpoint to underscore why a high-risk approach is optimal. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
 
-        content = cached_blocks(llm, (role_and_resources, True), (debate_state, False))
+        content = cached_blocks(llm, (role_and_resources, cache_role_and_resources), (debate_state, False))
         response = llm.invoke([HumanMessage(content=content)])
 
         argument = f"Aggressive Analyst: {response.content}"

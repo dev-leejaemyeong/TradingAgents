@@ -101,12 +101,24 @@ class GraphSetup:
             ),
         }
 
+        # Caching role_and_resources on a Bull/Bear/risk-debate node only
+        # pays off if that node fires more than once in this debate, so a
+        # later turn can read what an earlier turn wrote (prompt_caching.py,
+        # TODOS #85 2026-09-02 A/B test). With max_debate_rounds/
+        # max_risk_discuss_rounds == 1 (this project's production default as
+        # of writing), each node fires exactly once -- caching it would only
+        # ever pay Anthropic's write premium with no read to recoup it.
+        cache_debate_rounds = self.conditional_logic.max_debate_rounds > 1
+        cache_risk_rounds = self.conditional_logic.max_risk_discuss_rounds > 1
+
         # Create researcher and manager nodes
         bull_researcher_node = create_bull_researcher(
-            self._llm_for("bull_researcher", self.quick_thinking_llm)
+            self._llm_for("bull_researcher", self.quick_thinking_llm),
+            cache_role_and_resources=cache_debate_rounds,
         )
         bear_researcher_node = create_bear_researcher(
-            self._llm_for("bear_researcher", self.quick_thinking_llm)
+            self._llm_for("bear_researcher", self.quick_thinking_llm),
+            cache_role_and_resources=cache_debate_rounds,
         )
         research_manager_node = create_research_manager(
             self._llm_for("research_manager", self.deep_thinking_llm)
@@ -115,13 +127,16 @@ class GraphSetup:
 
         # Create risk analysis nodes
         aggressive_analyst = create_aggressive_debator(
-            self._llm_for("aggressive_analyst", self.quick_thinking_llm)
+            self._llm_for("aggressive_analyst", self.quick_thinking_llm),
+            cache_role_and_resources=cache_risk_rounds,
         )
         neutral_analyst = create_neutral_debator(
-            self._llm_for("neutral_analyst", self.quick_thinking_llm)
+            self._llm_for("neutral_analyst", self.quick_thinking_llm),
+            cache_role_and_resources=cache_risk_rounds,
         )
         conservative_analyst = create_conservative_debator(
-            self._llm_for("conservative_analyst", self.quick_thinking_llm)
+            self._llm_for("conservative_analyst", self.quick_thinking_llm),
+            cache_role_and_resources=cache_risk_rounds,
         )
         portfolio_manager_node = create_portfolio_manager(
             self._llm_for("portfolio_manager", self.deep_thinking_llm)

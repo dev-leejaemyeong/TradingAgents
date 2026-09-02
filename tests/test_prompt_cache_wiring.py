@@ -16,9 +16,11 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_anthropic import ChatAnthropic
 
+import tradingagents.graph.setup as graph_setup_module
 from tradingagents.agents.analysts.market_analyst import create_market_analyst
 from tradingagents.agents.researchers.bull_researcher import create_bull_researcher
 from tradingagents.agents.risk_mgmt.aggressive_debator import create_aggressive_debator
+from tradingagents.graph.conditional_logic import ConditionalLogic
 
 
 def _anthropic_llm():
@@ -145,6 +147,24 @@ class TestBullResearcherCaching:
         assert "cache_control" not in blocks[-1]
         assert "prior round" in blocks[-1]["text"]
 
+    def test_cache_role_and_resources_false_skips_the_breakpoint(self):
+        """max_debate_rounds==1 (graph/setup.py passes cache_role_and_resources
+        =False in that case): this node fires exactly once, so a cache
+        breakpoint here would only pay Anthropic's write premium with no
+        later turn to ever read it back (TODOS #85 A/B test, 2026-09-02,
+        found exactly this waste live: 3/3 tickers wrote ~18-19K cache
+        tokens, 0 ever read)."""
+        llm = _anthropic_llm()
+        _mock_method(llm, "invoke", MagicMock(return_value=MagicMock(content="argument")))
+
+        create_bull_researcher(llm, cache_role_and_resources=False)(_bull_state())
+
+        blocks = llm.invoke.call_args[0][0][0].content
+        assert isinstance(blocks, list)
+        assert "cache_control" not in blocks[0]
+        assert "Market research report: Market strong." in blocks[0]["text"]
+        assert "cache_control" not in blocks[-1]
+
 
 def _aggressive_state():
     return {
@@ -186,3 +206,93 @@ class TestAggressiveDebatorCaching:
         assert "cache_control" in blocks[0]
         assert "Buy 100 shares." in blocks[0]["text"]
         assert "cache_control" not in blocks[-1]
+
+    def test_cache_role_and_resources_false_skips_the_breakpoint(self):
+        """max_risk_discuss_rounds==1 (graph/setup.py passes
+        cache_role_and_resources=False in that case): same reasoning as
+        TestBullResearcherCaching's equivalent test."""
+        llm = _anthropic_llm()
+        _mock_method(llm, "invoke", MagicMock(return_value=MagicMock(content="argument")))
+        create_aggressive_debator(llm, cache_role_and_resources=False)(_aggressive_state())
+
+        blocks = llm.invoke.call_args[0][0][0].content
+        assert "cache_control" not in blocks[0]
+        assert "Buy 100 shares." in blocks[0]["text"]
+        assert "cache_control" not in blocks[-1]
+
+
+@pytest.mark.unit
+class TestSetupGraphCacheWiring:
+    """graph/setup.py must derive cache_role_and_resources from the actual
+    configured round counts, not hardcode it -- this is what makes the
+    node-level behavior above (should_cache follows the flag) actually reach
+    a real graph. Builds a real GraphSetup/ConditionalLogic (pure local
+    graph construction, no LLM/network calls) with the 5 caching node
+    factories monkeypatched to record what they were called with."""
+
+    @staticmethod
+    def _tool_nodes():
+        return {key: (lambda state: state) for key in ("market", "social", "news", "fundamentals")}
+
+    def _build(self, monkeypatch, max_debate_rounds, max_risk_discuss_rounds):
+        captured = {}
+
+        def _capturing_factory(name):
+            def factory(llm, cache_role_and_resources=True):
+                captured[name] = cache_role_and_resources
+                return lambda state: state
+            return factory
+
+        for target, name in (
+            ("create_bull_researcher", "bull_researcher"),
+            ("create_bear_researcher", "bear_researcher"),
+            ("create_aggressive_debator", "aggressive_analyst"),
+            ("create_conservative_debator", "conservative_analyst"),
+            ("create_neutral_debator", "neutral_analyst"),
+        ):
+            monkeypatch.setattr(graph_setup_module, target, _capturing_factory(name))
+
+        graph_setup = graph_setup_module.GraphSetup(
+            quick_thinking_llm="QUICK",
+            deep_thinking_llm="DEEP",
+            tool_nodes=self._tool_nodes(),
+            conditional_logic=ConditionalLogic(
+                max_debate_rounds=max_debate_rounds,
+                max_risk_discuss_rounds=max_risk_discuss_rounds,
+            ),
+        )
+        graph_setup.setup_graph()
+        return captured
+
+    def test_single_round_disables_caching_on_all_five_nodes(self, monkeypatch):
+        """This project's production default (max_debate_rounds=
+        max_risk_discuss_rounds=1) -- every debate node fires exactly once,
+        so none of them should mark anything cacheable."""
+        captured = self._build(monkeypatch, max_debate_rounds=1, max_risk_discuss_rounds=1)
+        assert captured == {
+            "bull_researcher": False,
+            "bear_researcher": False,
+            "aggressive_analyst": False,
+            "conservative_analyst": False,
+            "neutral_analyst": False,
+        }
+
+    def test_multi_round_enables_caching_on_all_five_nodes(self, monkeypatch):
+        captured = self._build(monkeypatch, max_debate_rounds=2, max_risk_discuss_rounds=2)
+        assert captured == {
+            "bull_researcher": True,
+            "bear_researcher": True,
+            "aggressive_analyst": True,
+            "conservative_analyst": True,
+            "neutral_analyst": True,
+        }
+
+    def test_debate_and_risk_rounds_are_independent(self, monkeypatch):
+        """A config with only one side multi-round (unusual, but not
+        excluded by default_config.py) must not couple the two flags."""
+        captured = self._build(monkeypatch, max_debate_rounds=1, max_risk_discuss_rounds=2)
+        assert captured["bull_researcher"] is False
+        assert captured["bear_researcher"] is False
+        assert captured["aggressive_analyst"] is True
+        assert captured["conservative_analyst"] is True
+        assert captured["neutral_analyst"] is True

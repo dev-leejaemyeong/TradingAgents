@@ -7,7 +7,7 @@ from tradingagents.agents.utils.agent_utils import (
 from tradingagents.agents.utils.prompt_caching import cached_blocks
 
 
-def create_conservative_debator(llm):
+def create_conservative_debator(llm, cache_role_and_resources: bool = True):
     def conservative_node(state) -> dict:
         risk_debate_state = state["risk_debate_state"]
         history = risk_debate_state.get("history", "")
@@ -26,8 +26,14 @@ def create_conservative_debator(llm):
 
         # See prompt_caching.py: role instructions + trader's decision + this
         # run's reports repeat unchanged on every aggressive/conservative/
-        # neutral turn of this debate, so they're cached; the growing history
-        # and latest counter-arguments stay uncached and last.
+        # neutral turn of this debate -- but only WHEN there's more than one
+        # round to repeat on. With max_risk_discuss_rounds==1 (this project's
+        # production default) this node fires exactly once, so marking it
+        # cacheable would only ever pay the write premium with no later turn
+        # to read it back (confirmed via real A/B run, 2026-09-02). The
+        # caller (graph/setup.py) decides via cache_role_and_resources, from
+        # max_risk_discuss_rounds > 1. The growing history and latest
+        # counter-arguments stay uncached and last regardless.
         role_and_resources = f"""As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. Here is the trader's decision:
 
 {trader_decision}
@@ -44,7 +50,7 @@ Company Fundamentals Report: {fundamentals_report}
 
 Engage by questioning their optimism and emphasizing the potential downsides they may have overlooked. Address each of their counterpoints to showcase why a conservative stance is ultimately the safest path for the firm's assets. Focus on debating and critiquing their arguments to demonstrate the strength of a low-risk strategy over their approaches. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
 
-        content = cached_blocks(llm, (role_and_resources, True), (debate_state, False))
+        content = cached_blocks(llm, (role_and_resources, cache_role_and_resources), (debate_state, False))
         response = llm.invoke([HumanMessage(content=content)])
 
         argument = f"Conservative Analyst: {response.content}"
