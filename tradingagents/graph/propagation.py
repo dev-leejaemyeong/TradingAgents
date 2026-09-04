@@ -24,6 +24,8 @@ class Propagator:
         instrument_context: str = "",
         total_capital_usd: float | None = None,
         max_positions: int | None = None,
+        pm_size_range_low: float | None = None,
+        pm_size_range_high: float | None = None,
     ) -> dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -37,6 +39,11 @@ class Propagator:
         the Portfolio Manager's equal-weight sizing baseline (office-hours
         design session, 2026-08-08) -- see portfolio_manager.py's docstring
         for why ``available_budget_usd`` is deliberately excluded here.
+
+        ``pm_size_range_low``/``pm_size_range_high`` (2026-09-04): the
+        multiple-of-baseline range the PM prompt tells the PM to typically
+        size within -- see portfolio_manager.py's docstring for why this is
+        threaded through rather than hardcoded in the prompt text.
         """
         return {
             "messages": [("human", company_name)],
@@ -47,6 +54,8 @@ class Propagator:
             "past_context": past_context,
             "total_capital_usd": total_capital_usd,
             "max_positions": max_positions,
+            "pm_size_range_low": pm_size_range_low,
+            "pm_size_range_high": pm_size_range_high,
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",

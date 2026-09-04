@@ -89,3 +89,13 @@ class AgentState(MessagesState):
     # portfolio_manager.py's docstring)
     total_capital_usd: Annotated[float | None, "Total portfolio capital, for the PM's equal-weight sizing baseline"]
     max_positions: Annotated[int | None, "Configured max open positions, for the PM's equal-weight sizing baseline"]
+
+    # 2026-09-04: single source of truth for the PM prompt's "typically
+    # within roughly Nx-Mx the baseline" sizing guidance, previously a
+    # hardcoded string kept in sync by hand with orchestrator.py's
+    # PM_SIZE_TYPICAL_RANGE_LOW/HIGH (the constants that then check the PM's
+    # own proposal against that same range). Defaults (portfolio_manager.py)
+    # match the values that were hardcoded before this -- byte-identical
+    # prompt text for any caller that doesn't pass these.
+    pm_size_range_low: Annotated[float | None, "Lower bound (as a multiple of the equal-weight baseline) the PM prompt tells the PM to typically size within"]
+    pm_size_range_high: Annotated[float | None, "Upper bound (as a multiple of the equal-weight baseline) the PM prompt tells the PM to typically size within"]

@@ -22,6 +22,17 @@ recreating the exact "divide what's left" distortion this design avoids.
 The real cash ceiling is still enforced, just downstream and silently by
 ``position_sizer.clamp_to_budget()`` (orchestrator.py) — the PM's number is
 never trusted blindly regardless of what it's told.
+
+``pm_size_range_low``/``pm_size_range_high`` (2026-09-04): the "typically
+within roughly Nx-Mx the baseline" guidance below is rendered from these
+state values rather than hardcoded, because orchestrator.py independently
+checks the PM's actual proposal against
+``PM_SIZE_TYPICAL_RANGE_LOW``/``HIGH`` for its "sizing outside typical
+range" alert — two copies of the same number with nothing enforcing they
+match used to risk the alert firing against a range the PM was never
+actually told to follow. Defaulting to 0.5/2.0 here (below) reproduces the
+exact text this prompt had before this change for any caller that doesn't
+pass them (e.g. TradingAgents CLI callers outside this project).
 """
 
 from __future__ import annotations
@@ -58,6 +69,10 @@ def create_portfolio_manager(llm):
 
         total_capital_usd = state.get("total_capital_usd")
         max_positions = state.get("max_positions")
+        # Defaults reproduce the exact range this prompt hardcoded before
+        # 2026-09-04 -- see this module's docstring.
+        pm_size_range_low = state.get("pm_size_range_low") or 0.5
+        pm_size_range_high = state.get("pm_size_range_high") or 2.0
         sizing_context_line = ""
         if total_capital_usd and max_positions:
             baseline_usd = total_capital_usd / max_positions
@@ -66,7 +81,8 @@ def create_portfolio_manager(llm):
                 f"{max_positions} positions. Equal-weight baseline for an average-conviction "
                 f"Buy: ${baseline_usd:,.2f} — this is a reference point, not a fixed target. "
                 f"Size larger than this for stronger conviction, smaller for weaker conviction, "
-                f"at your discretion — typically within roughly 0.5x-2x the baseline, and both "
+                f"at your discretion — typically within roughly "
+                f"{pm_size_range_low:g}x-{pm_size_range_high:g}x the baseline, and both "
                 f"directions should see real use, not just the downward one. A Buy rating implies "
                 f"real conviction: if the debate only supports a token-sized position, prefer Hold "
                 f"or Underweight over a Buy sized near zero. (This baseline does not account for "

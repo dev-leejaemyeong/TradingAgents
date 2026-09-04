@@ -424,6 +424,8 @@ class TradingAgentsGraph:
         total_capital_usd: float | None = None,
         max_positions: int | None = None,
         extra_context: str = "",
+        pm_size_range_low: float | None = None,
+        pm_size_range_high: float | None = None,
     ):
         """Run the trading agents graph for a company on a specific date.
 
@@ -446,6 +448,12 @@ class TradingAgentsGraph:
         Portfolio Manager (the only agent that reads ``past_context``,
         portfolio_manager.py) sees it with no prompt-template change.
         Defaults to "" (existing callers unaffected).
+
+        ``pm_size_range_low``/``pm_size_range_high`` (2026-09-04): forwarded
+        to the initial state for the PM prompt's sizing-range guidance --
+        see portfolio_manager.py's docstring. Both default to None, which
+        portfolio_manager.py resolves to the same 0.5/2.0 the prompt text
+        hardcoded before this (existing callers unaffected).
         """
         self.ticker = company_name
 
@@ -479,6 +487,8 @@ class TradingAgentsGraph:
                 total_capital_usd=total_capital_usd,
                 max_positions=max_positions,
                 extra_context=extra_context,
+                pm_size_range_low=pm_size_range_low,
+                pm_size_range_high=pm_size_range_high,
             )
         finally:
             if self._checkpointer_ctx is not None:
@@ -509,6 +519,8 @@ class TradingAgentsGraph:
         total_capital_usd: float | None = None,
         max_positions: int | None = None,
         extra_context: str = "",
+        pm_size_range_low: float | None = None,
+        pm_size_range_high: float | None = None,
     ):
         """Execute the graph and write the resulting state to disk and memory log."""
         # Initialize state — inject memory log context for PM and the
@@ -525,6 +537,8 @@ class TradingAgentsGraph:
             instrument_context=instrument_context,
             total_capital_usd=total_capital_usd,
             max_positions=max_positions,
+            pm_size_range_low=pm_size_range_low,
+            pm_size_range_high=pm_size_range_high,
         )
         args = self.propagator.get_graph_args(callbacks=self.callbacks)
 

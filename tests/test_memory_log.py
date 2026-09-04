@@ -705,6 +705,36 @@ class TestPortfolioManagerInjection:
         pm_node(state)
         assert "Lessons from prior decisions" not in captured["prompt"]
 
+    # pm_size_range_low/high (2026-09-04) -- rendered into the sizing
+    # guidance instead of a hardcoded "0.5x-2x", so orchestrator.py's
+    # PM_SIZE_TYPICAL_RANGE_LOW/HIGH and this prompt can never drift apart.
+
+    def test_pm_sizing_range_defaults_to_original_hardcoded_text(self):
+        """No pm_size_range_low/high in state (e.g. a caller outside this
+        project, or one that predates this feature) reproduces the exact
+        "0.5x-2x" text this prompt hardcoded before 2026-09-04."""
+        captured = {}
+        llm = _structured_pm_llm(captured)
+        pm_node = create_portfolio_manager(llm)
+        state = _make_pm_state()
+        state["total_capital_usd"] = 10_000.0
+        state["max_positions"] = 8
+        pm_node(state)
+        assert "typically within roughly 0.5x-2x the baseline" in captured["prompt"]
+
+    def test_pm_sizing_range_uses_state_values_when_given(self):
+        captured = {}
+        llm = _structured_pm_llm(captured)
+        pm_node = create_portfolio_manager(llm)
+        state = _make_pm_state()
+        state["total_capital_usd"] = 10_000.0
+        state["max_positions"] = 8
+        state["pm_size_range_low"] = 0.3
+        state["pm_size_range_high"] = 3.0
+        pm_node(state)
+        assert "typically within roughly 0.3x-3x the baseline" in captured["prompt"]
+        assert "0.5x-2x" not in captured["prompt"]
+
     def test_pm_returns_rendered_markdown_with_rating(self):
         """The structured PortfolioDecision is rendered to markdown that
         downstream consumers (memory log, signal processor, CLI display)
