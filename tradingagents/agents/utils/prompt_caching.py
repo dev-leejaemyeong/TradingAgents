@@ -68,3 +68,38 @@ def cached_blocks(llm, *segments: tuple[str, bool]) -> str | list[dict]:
             block["cache_control"] = dict(_EPHEMERAL)
         blocks.append(block)
     return blocks
+
+
+def mark_last_message_cacheable(llm, messages: list) -> list:
+    """Return a copy of ``messages`` with a cache_control breakpoint on the
+    LAST message's content -- for a node's own multi-round tool-calling loop
+    (LangGraph analyst <-> ToolNode), where the accumulated tool-call history
+    grows every round and is resent unchanged as a prefix on every
+    subsequent round, but ``cached_blocks()`` above only ever covers the
+    static role/date segments in the SystemMessage, not this growing tail.
+
+    Anthropic matches the LONGEST previously-cached prefix automatically, so
+    marking only the newest last message each round is enough -- there is no
+    need to track or re-mark earlier rounds' breakpoints once a later one
+    supersedes them. Uses one more of Anthropic's 4-breakpoints-per-request
+    budget on top of ``cached_blocks()``'s two (role_and_instructions,
+    run_date), leaving one spare.
+
+    A no-op (returns ``messages`` unchanged) for non-Anthropic providers, an
+    empty list (nothing accumulated yet -- the very first round), or when the
+    last message's content isn't a plain string (already block-structured,
+    or empty) -- left as-is rather than guessing how to rewrite it.
+    """
+    if not supports_prompt_caching(llm) or not messages:
+        return messages
+    last = messages[-1]
+    if not isinstance(last.content, str) or not last.content:
+        return messages
+    marked = last.model_copy(
+        update={
+            "content": [
+                {"type": "text", "text": last.content, "cache_control": dict(_EPHEMERAL)}
+            ]
+        }
+    )
+    return [*messages[:-1], marked]

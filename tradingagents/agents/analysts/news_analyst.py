@@ -9,7 +9,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_news,
     get_prediction_markets,
 )
-from tradingagents.agents.utils.prompt_caching import cached_blocks
+from tradingagents.agents.utils.prompt_caching import cached_blocks, mark_last_message_cacheable
 from tradingagents.dataflows.broker_report_data import get_broker_macro_note
 
 
@@ -69,7 +69,12 @@ def create_news_analyst(llm):
             (run_date, True),
             (per_ticker, False),
         )
-        messages = [SystemMessage(content=content), *state["messages"]]
+        # TODOS.md #103: this node's own tool-calling loop (LangGraph
+        # analyst <-> ToolNode) resends the accumulated history unchanged on
+        # every round -- mark its tail cacheable so round N+1 reads round N's
+        # tool results instead of repaying them at full price.
+        history = mark_last_message_cacheable(llm, state["messages"])
+        messages = [SystemMessage(content=content), *history]
 
         result = llm.bind_tools(tools).invoke(messages)
 
