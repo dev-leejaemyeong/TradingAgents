@@ -137,6 +137,44 @@ def test_fundamentals_non_json_body_unchanged(monkeypatch):
     assert avf.get_cashflow("AAPL", curr_date="2024-01-01") == "not-json"
 
 
+# ---------------------------------------------------------------------------
+# Date trim (see the rationale on the unguarded trim in alpha_vantage_common,
+# ported from upstream 2026-09-08)
+# ---------------------------------------------------------------------------
+
+_DAILY_CSV = (
+    "timestamp,open,high,low,close,volume\n"
+    "2024-05-13,1,1,1,1,10\n"   # after end_date -> must never be served
+    "2024-05-10,1,1,1,1,10\n"
+    "2024-05-09,1,1,1,1,10\n"
+)
+
+
+@pytest.mark.unit
+def test_stock_data_is_trimmed_to_the_requested_window(monkeypatch):
+    monkeypatch.setattr(avs, "_make_api_request", lambda *a, **k: _DAILY_CSV)
+    out = avs.get_stock("IBM", "2024-05-09", "2024-05-10")
+    assert "2024-05-10" in out and "2024-05-09" in out
+    assert "2024-05-13" not in out, "bar after end_date leaked into the window"
+
+
+@pytest.mark.unit
+def test_unparseable_body_is_never_served_untrimmed(monkeypatch):
+    """The trim used to swallow the failure and return the whole body, putting
+    bars after end_date into a backtest. It must raise instead."""
+    monkeypatch.setattr(avs, "_make_api_request",
+                        lambda *a, **k: "timestamp,close\nnot-a-date,1\n")
+
+    with pytest.raises(ValueError):
+        avs.get_stock("IBM", "2024-05-09", "2024-05-10")
+
+
+@pytest.mark.unit
+def test_empty_body_still_passes_through(monkeypatch):
+    monkeypatch.setattr(avs, "_make_api_request", lambda *a, **k: "")
+    assert avs.get_stock("IBM", "2024-05-09", "2024-05-10") == ""
+
+
 def _earnings_payload(reports):
     return json.dumps({"symbol": "AAPL", "quarterlyEarnings": reports})
 

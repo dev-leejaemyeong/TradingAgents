@@ -454,6 +454,12 @@ class TradingAgentsGraph:
         see portfolio_manager.py's docstring. Both default to None, which
         portfolio_manager.py resolves to the same 0.5/2.0 the prompt text
         hardcoded before this (existing callers unaffected).
+
+        Returns ``(final_state, signal)`` where ``signal`` is one of the 5-tier
+        ratings (Buy / Overweight / Hold / Underweight / Sell) or ``"REVIEW"``
+        when the decision had no parseable rating (upstream #1170, ported
+        2026-09-08); guard with ``tradingagents.agents.utils.rating.is_review``
+        before mapping it to the PortfolioRating enum.
         """
         self.ticker = company_name
 

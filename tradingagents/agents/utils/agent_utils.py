@@ -83,6 +83,24 @@ def get_language_instruction() -> str:
     return f" Write your entire response in {lang}."
 
 
+def opponent_argument_or_opening(text: str, opponent: str) -> str:
+    """Opponent's latest argument, or an explicit opening marker when empty.
+
+    The first speaker in each debate round receives an empty opponent response;
+    interpolating it into a "refute the opponent" prompt makes the model
+    fabricate the other side's position. Returning a clear "has not spoken yet"
+    marker instead lets it open with its own case (upstream #1176, ported
+    2026-09-08). With this project's production default (``max_debate_rounds``/
+    ``max_risk_discuss_rounds`` == 1, see TODOS.md), every debator is always
+    the opening speaker, so this fires on every live debate turn -- not just a
+    rare first round of a longer debate.
+    """
+    text = (text or "").strip()
+    if text:
+        return text
+    return f"(The {opponent} has not spoken yet — open the debate with your own case.)"
+
+
 def _clean_identity_value(value: Any) -> str | None:
     """Return a trimmed string, or None for empty / placeholder-ish values."""
     if not isinstance(value, str):

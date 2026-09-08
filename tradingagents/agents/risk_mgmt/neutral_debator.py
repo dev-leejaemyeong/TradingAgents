@@ -3,6 +3,7 @@ from langchain_core.messages import HumanMessage
 from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
+    opponent_argument_or_opening,
 )
 from tradingagents.agents.utils.prompt_caching import cached_blocks
 
@@ -13,8 +14,12 @@ def create_neutral_debator(llm, cache_role_and_resources: bool = True):
         history = risk_debate_state.get("history", "")
         neutral_history = risk_debate_state.get("neutral_history", "")
 
-        current_aggressive_response = risk_debate_state.get("current_aggressive_response", "")
-        current_conservative_response = risk_debate_state.get("current_conservative_response", "")
+        current_aggressive_response = opponent_argument_or_opening(
+            risk_debate_state.get("current_aggressive_response", ""), "aggressive analyst"
+        )
+        current_conservative_response = opponent_argument_or_opening(
+            risk_debate_state.get("current_conservative_response", ""), "conservative analyst"
+        )
 
         market_research_report = state["market_report"]
         sentiment_report = state["sentiment_report"]

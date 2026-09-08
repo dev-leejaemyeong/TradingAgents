@@ -88,6 +88,16 @@ class TestNullishFloatCoercion:
         p = TraderProposal(action=TraderAction.BUY, reasoning="x", entry_price="189.5")
         assert p.entry_price == 189.5
 
+    def test_trader_percentage_stop_loss_coerces_to_none(self):
+        # Upstream #1288 (ported 2026-09-08): "15%" is not a price and must not
+        # be salvaged into 15.0 -- that would put a stop at $15 on a $600 stock.
+        p = TraderProposal(action=TraderAction.SELL, reasoning="x", stop_loss="15%")
+        assert p.stop_loss is None
+
+    def test_trader_formatted_price_string_parses(self):
+        p = TraderProposal(action=TraderAction.BUY, reasoning="x", entry_price="$1,234.50")
+        assert p.entry_price == 1234.50
+
     def test_pm_nullish_price_target_coerces_to_none(self):
         d = PortfolioDecision(
             rating=PortfolioRating.OVERWEIGHT,

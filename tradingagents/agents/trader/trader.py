@@ -33,6 +33,14 @@ def create_trader(llm):
                     "You are a trading agent analyzing market data to make investment decisions. "
                     "Based on your analysis, provide a specific recommendation to buy, sell, or hold. "
                     "Anchor your reasoning in the analysts' reports and the research plan. "
+                    # Entry/stop are numeric price fields. Asking for concrete
+                    # levels invites a percentage ("15%"), which is not a price
+                    # and used to fail the structured parse (upstream #1288,
+                    # ported 2026-09-08).
+                    "State entry price and stop-loss as absolute price levels in the "
+                    "instrument's quote currency (for example 189.5), never a percentage "
+                    "or a range; convert a percentage distance to the price level it "
+                    "implies, or omit the field if you cannot state a number. "
                     + NO_EXTERNAL_TOOLS
                     + get_language_instruction()
                 ),
