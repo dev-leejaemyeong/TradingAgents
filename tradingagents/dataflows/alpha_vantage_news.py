@@ -1,4 +1,8 @@
+import json
+from datetime import datetime, timedelta
+
 from .alpha_vantage_common import _make_api_request, format_datetime_for_api
+from .config import get_config
 
 
 def get_news(ticker, start_date, end_date) -> dict[str, str] | str:
@@ -53,20 +57,52 @@ def get_global_news(curr_date, look_back_days: int = 7, limit: int = 50) -> dict
     return _make_api_request("NEWS_SENTIMENT", params)
 
 
-def get_insider_transactions(symbol: str) -> dict[str, str] | str:
-    """Returns latest and historical insider transactions by key stakeholders.
+def get_insider_transactions(
+    symbol: str,
+    curr_date: str,
+    look_back_days: int | None = None,
+    limit: int | None = None,
+) -> str:
+    """Returns recent insider transactions by key stakeholders, bounded to a
+    recent window.
 
-    Covers transactions by founders, executives, board members, etc.
+    Covers transactions by founders, executives, board members, etc. The raw
+    endpoint has no server-side date/limit support and returns a ticker's
+    ENTIRE insider-transaction history since listing -- confirmed 2026-09-09
+    that this can reach hundreds of thousands of tokens for a heavily-traded,
+    long-listed company (e.g. AAPL: 7,148 records back to 2004, ~645K tokens
+    unfiltered), which would exceed the model's context window. Filtered and
+    explicitly sorted here rather than trusting the vendor's ordering.
 
     Args:
         symbol: Ticker symbol. Example: "IBM".
+        curr_date: Current date (yyyy-mm-dd), anchor for look_back_days.
+        look_back_days: Days of history to include. ``None`` falls back to
+            ``insider_transactions_lookback_days`` from the active config.
+        limit: Maximum number of most-recent transactions to return. ``None``
+            falls back to ``insider_transactions_limit`` from the active config.
 
     Returns:
-        Dictionary containing insider transaction data or JSON string.
+        JSON string containing the filtered insider transaction data.
     """
+    config = get_config()
+    if look_back_days is None:
+        look_back_days = config["insider_transactions_lookback_days"]
+    if limit is None:
+        limit = config["insider_transactions_limit"]
 
     params = {
         "symbol": symbol,
     }
 
-    return _make_api_request("INSIDER_TRANSACTIONS", params)
+    response_text = _make_api_request("INSIDER_TRANSACTIONS", params)
+    transactions = json.loads(response_text).get("data", [])
+
+    cutoff = (datetime.strptime(curr_date, "%Y-%m-%d") - timedelta(days=look_back_days)).strftime("%Y-%m-%d")
+    recent = sorted(
+        (tx for tx in transactions if tx.get("transaction_date", "") >= cutoff),
+        key=lambda tx: tx.get("transaction_date", ""),
+        reverse=True,
+    )[:limit]
+
+    return json.dumps({"data": recent})

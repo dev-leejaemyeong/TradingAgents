@@ -48,13 +48,25 @@ def get_global_news(
 @tool
 def get_insider_transactions(
     ticker: Annotated[str, "ticker symbol"],
+    curr_date: Annotated[str, "current date you are trading at, yyyy-mm-dd"],
+    look_back_days: Annotated[int | None, "Days of history to include; omit to use the configured default"] = None,
+    limit: Annotated[int | None, "Max transactions to return; omit to use the configured default"] = None,
 ) -> str:
     """
-    Retrieve insider transaction information about a company.
+    Retrieve insider transaction information about a company, limited to the
+    most recent transactions. Some tickers report thousands of transactions
+    going back decades if returned unfiltered, which would exceed the model's
+    context window -- this is bounded to a recent window instead. Defaults for
+    look_back_days and limit come from DEFAULT_CONFIG
+    (insider_transactions_lookback_days, insider_transactions_limit); pass
+    explicit values to override.
     Uses the configured news_data vendor.
     Args:
         ticker (str): Ticker symbol of the company
+        curr_date (str): Current date you are trading at, yyyy-mm-dd
+        look_back_days (int): Days of history to include; omit to inherit config
+        limit (int): Maximum number of most-recent transactions to return; omit to inherit config
     Returns:
-        str: A report of insider transaction data
+        str: A report of recent insider transaction data
     """
-    return route_to_vendor("get_insider_transactions", ticker)
+    return route_to_vendor("get_insider_transactions", ticker, curr_date, look_back_days, limit)

@@ -127,6 +127,8 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "news_article_limit": 20,             # max articles per ticker (ticker-news)
     "global_news_article_limit": 10,      # max articles for global/macro news
     "global_news_lookback_days": 7,       # macro news lookback window
+    "insider_transactions_lookback_days": 90,  # Form 4 filing lookback window
+    "insider_transactions_limit": 50,     # max insider transactions returned (some tickers report thousands since listing)
     # Search queries used by get_global_news for macro headlines. Extend or
     # replace to broaden geographic / sector coverage.
     "global_news_queries": [
@@ -152,7 +154,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
         # VendorNotEntitledError handling), never a hard failure.
         "news_data": "alpha_vantage,yfinance",  # Options: alpha_vantage, yfinance
         "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
-        "prediction_markets": "polymarket",  # Options: polymarket (keyless)
+        "prediction_markets": "manifold",  # Options: manifold, polymarket (both keyless; polymarket blocked from this deployment's network, TODOS.md #114)
         "earnings_calendar": "alpha_vantage",  # Options: alpha_vantage (TODOS.md #89)
     },
     # Tool-level configuration (takes precedence over category-level)

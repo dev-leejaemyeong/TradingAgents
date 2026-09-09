@@ -444,9 +444,23 @@ def get_income_statement(
 
 
 def get_insider_transactions(
-    ticker: Annotated[str, "ticker symbol of the company"]
+    ticker: Annotated[str, "ticker symbol of the company"],
+    curr_date: Annotated[str, "current date, yyyy-mm-dd"],
+    look_back_days: Annotated[int | None, "days of history to include; None uses the configured default"] = None,
+    limit: Annotated[int | None, "max transactions to return; None uses the configured default"] = None,
 ):
-    """Get insider transactions data from yfinance."""
+    """Get insider transactions data from yfinance, bounded to a recent
+    window (same bound as the Alpha Vantage path, applied here too for
+    consistency -- yfinance's own API already returns a much smaller
+    recent-only set, but this keeps behavior uniform regardless of vendor)."""
+    from .config import get_config
+
+    config = get_config()
+    if look_back_days is None:
+        look_back_days = config["insider_transactions_lookback_days"]
+    if limit is None:
+        limit = config["insider_transactions_limit"]
+
     canonical = normalize_symbol(ticker)
     try:
         ticker_obj = yf.Ticker(canonical)
@@ -456,6 +470,14 @@ def get_insider_transactions(
         # so report it plainly rather than treating the symbol as invalid.
         if data is None or data.empty:
             return f"No insider transactions reported for symbol '{canonical}'"
+
+        if "Start Date" in data.columns:
+            cutoff = pd.Timestamp(curr_date) - pd.Timedelta(days=look_back_days)
+            data = data[pd.to_datetime(data["Start Date"], errors="coerce") >= cutoff]
+            data = data.sort_values("Start Date", ascending=False).head(limit)
+
+        if data.empty:
+            return f"No insider transactions in the last {look_back_days} days for symbol '{canonical}'"
 
         # Convert to CSV string for consistency with other functions
         csv_string = data.to_csv()
