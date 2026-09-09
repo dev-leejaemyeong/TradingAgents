@@ -69,6 +69,19 @@ MACRO_SERIES = {
     "consumer_sentiment": "UMCSENT",
     "housing_starts": "HOUST",
     "retail_sales": "RSAFS",
+    # Recession (2026-09-09, TODOS #114) -- NY Fed's Chauvet-Piger smoothed
+    # recession probability model, a real published academic/Fed-affiliated
+    # estimate. Preferred over crowd-sourced prediction-market betting for
+    # this specific question: cross-checked live against Manifold Markets'
+    # "US recession in 2026?" market (8%) and found wildly divergent from
+    # this model's latest reading (76%, 2026-07) -- not proof either is
+    # "right", but real academic modeling on real coincident economic data
+    # is the more defensible number to hand the analyst than a thin
+    # play-money bet. This is a *monthly, smoothed, lagged* series (the
+    # "latest" reading can be 1-2 months stale by publication) -- the
+    # rendered table already carries the as-of date so this isn't hidden.
+    "recession_probability": "RECPROUSM156N",
+    "recession": "RECPROUSM156N",
 }
 
 

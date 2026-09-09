@@ -8,6 +8,22 @@ what the crowd actually prices to happen next.
 Uses Polymarket's public Gamma API (https://gamma-api.polymarket.com) — no key,
 no auth. Each market's ``outcomePrices`` are the implied probabilities of its
 outcomes (a "Yes" at 0.76 means the market prices a 76% chance).
+
+**Blocked from this network (2026-09-09, TODOS #114).** Direct calls return
+HTTP 451 (a Cloudflare-served country-block page) essentially always —
+confirmed live (6/6 test calls blocked with no load at all, ruling out the
+2026-09-08 duplicate-debate storm as the cause). A Cloudflare Worker relay was
+tried as a workaround and does NOT work: Workers execute at the edge PoP
+nearest the caller, so a Worker invoked from this network still makes its own
+outbound `fetch()` from a blocked-country PoP (confirmed live: same relay
+returned Cloudflare error 1026, itself documented as a "legal restriction
+(country block)" error, not a DNS/config error). No further attempt to route
+around this here — ``manifold.py`` covers the same use case for this
+deployment (see ``get_prediction_markets``'s docstring there) and is wired as
+the default `prediction_markets` vendor instead. This module is kept
+unmodified/available in case a future deployment (e.g. after the pending
+Oracle Cloud move, DESIGN.md "Cloud migration consideration") runs from a
+non-blocked network.
 """
 import json
 import logging

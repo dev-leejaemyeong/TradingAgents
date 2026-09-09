@@ -20,6 +20,7 @@ from .errors import (
     VendorRateLimitError,
 )
 from .fred import get_macro_data as get_fred_macro_data
+from .manifold import get_prediction_markets as get_manifold_prediction_markets
 from .polymarket import get_prediction_markets as get_polymarket_prediction_markets
 from .y_finance import (
     get_balance_sheet as get_yfinance_balance_sheet,
@@ -89,6 +90,7 @@ VENDOR_LIST = [
     "yfinance",
     "fred",
     "polymarket",
+    "manifold",
     "alpha_vantage",
 ]
 
@@ -148,6 +150,7 @@ VENDOR_METHODS = {
     # prediction_markets
     "get_prediction_markets": {
         "polymarket": get_polymarket_prediction_markets,
+        "manifold": get_manifold_prediction_markets,
     },
     # earnings_calendar
     "get_earnings_calendar": {
