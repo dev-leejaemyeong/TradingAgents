@@ -33,17 +33,44 @@ class TestLoadOhlcvNoPoison(unittest.TestCase):
 
     def test_empty_download_raises_and_does_not_cache(self):
         empty = pd.DataFrame()
+        # A download that's empty on every attempt (real delisting, not a
+        # transient blip) must still end in NoMarketDataError once
+        # yf_retry's retries (2026-09-09 fix, see test below) are exhausted.
         with mock.patch.object(stockstats_utils.yf, "download", return_value=empty), \
+                mock.patch.object(stockstats_utils.time, "sleep"), \
                 self.assertRaises(NoMarketDataError):
             stockstats_utils.load_ohlcv("FAKE", "2026-01-01")
         # Nothing should have been written to the cache.
         self.assertEqual(os.listdir(self._tmp), [])
 
         # A second call must re-attempt the fetch (no poisoned cache served).
-        with mock.patch.object(stockstats_utils.yf, "download", return_value=empty) as dl2:
+        with mock.patch.object(stockstats_utils.yf, "download", return_value=empty) as dl2, \
+                mock.patch.object(stockstats_utils.time, "sleep"):
             with self.assertRaises(NoMarketDataError):
                 stockstats_utils.load_ohlcv("FAKE", "2026-01-01")
             self.assertTrue(dl2.called)
+
+    def test_transient_empty_download_is_retried_and_recovers(self):
+        # 2026-09-09 live crash: SUNE's debate died with NoMarketDataError
+        # ("Yahoo Finance returned no rows") even though the symbol was not
+        # actually delisted -- a manual re-fetch minutes later returned 147
+        # rows fine. yf.download() doesn't raise on this, it just returns an
+        # empty frame, so the old code accepted it as "success" on the first
+        # try. Simulate exactly that: empty once, then real data.
+        empty = pd.DataFrame()
+        real = pd.DataFrame(
+            {
+                "Date": pd.to_datetime(["2026-01-01"]),
+                "Open": [1.0], "High": [1.0], "Low": [1.0], "Close": [1.0], "Volume": [100],
+            }
+        ).set_index("Date")
+        with mock.patch.object(
+            stockstats_utils.yf, "download", side_effect=[empty, real]
+        ) as dl, mock.patch.object(stockstats_utils.time, "sleep") as sleep_mock:
+            data = stockstats_utils.load_ohlcv("SUNE", "2026-01-01")
+        self.assertEqual(dl.call_count, 2)
+        sleep_mock.assert_called_once()
+        self.assertFalse(data.empty)
 
 
 @pytest.mark.unit

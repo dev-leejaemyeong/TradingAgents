@@ -26,23 +26,45 @@ MAX_OHLCV_STALE_DAYS = 10
 OHLCV_CACHE_TTL_SECONDS = 900
 
 
-def yf_retry(func, max_retries=3, base_delay=2.0):
+def yf_retry(func, max_retries=3, base_delay=2.0, is_success=lambda result: True):
     """Execute a yfinance call with exponential backoff on rate limits.
 
     yfinance raises YFRateLimitError on HTTP 429 responses but does not
     retry them internally. This wrapper adds retry logic specifically
     for rate limits. Other exceptions propagate immediately.
+
+    ``is_success`` (2026-09-09, live crash: SUNE's debate died with
+    NoMarketDataError even though the symbol was not actually delisted --
+    a manual re-fetch minutes later returned 147 rows fine). yf.download()
+    doesn't raise on a transient empty response (yfinance's own "possibly
+    delisted; no price data found" case) -- it just returns an empty frame,
+    so the loop above accepted it as success on the first try and never got
+    a chance to retry. Callers for whom an empty/falsy result is a normal,
+    non-retryable answer (e.g. get_news() returning no articles) keep the
+    default no-op check; load_ohlcv() below passes a stricter one.
     """
+    last_result = None
     for attempt in range(max_retries + 1):
         try:
-            return func()
+            result = func()
         except YFRateLimitError:
             if attempt < max_retries:
                 delay = base_delay * (2 ** attempt)
                 logger.warning(f"Yahoo Finance rate limited, retrying in {delay:.0f}s (attempt {attempt + 1}/{max_retries})")
                 time.sleep(delay)
-            else:
-                raise
+                continue
+            raise
+        if is_success(result):
+            return result
+        last_result = result
+        if attempt < max_retries:
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                f"Yahoo Finance returned an unusable result, retrying in {delay:.0f}s "
+                f"(attempt {attempt + 1}/{max_retries})"
+            )
+            time.sleep(delay)
+    return last_result
 
 
 def _ensure_date_column(data: pd.DataFrame) -> pd.DataFrame:
@@ -192,14 +214,17 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
             data = cached
 
     if data is None:
-        downloaded = yf_retry(lambda: yf.download(
-            canonical,
-            start=start_str,
-            end=end_str,
-            multi_level_index=False,
-            progress=False,
-            auto_adjust=True,
-        ))
+        downloaded = yf_retry(
+            lambda: yf.download(
+                canonical,
+                start=start_str,
+                end=end_str,
+                multi_level_index=False,
+                progress=False,
+                auto_adjust=True,
+            ),
+            is_success=lambda df: df is not None and not df.empty and "Close" in df.columns,
+        )
         downloaded = _ensure_date_column(downloaded.reset_index())
         # Only cache real data — never persist an empty frame.
         if downloaded.empty or "Close" not in downloaded.columns:
