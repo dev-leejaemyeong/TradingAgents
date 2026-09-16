@@ -83,11 +83,10 @@ def create_portfolio_manager(llm):
                 f"Size larger than this for stronger conviction, smaller for weaker conviction, "
                 f"at your discretion — typically within roughly "
                 f"{pm_size_range_low:g}x-{pm_size_range_high:g}x the baseline, and both "
-                f"directions should see real use, not just the downward one. A Buy rating implies "
-                f"real conviction: if the debate only supports a token-sized position, prefer Hold "
-                f"or Underweight over a Buy sized near zero. (This baseline does not account for "
-                f"today's actual remaining cash — a downstream system enforces that limit "
-                f"separately, so size based on conviction, not on guessing what's left to spend.)\n"
+                f"directions should see real use, not just the downward one. (This baseline does "
+                f"not account for today's actual remaining cash — a downstream system enforces "
+                f"that limit separately, so size based on conviction, not on guessing what's "
+                f"left to spend.)\n"
             )
 
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
