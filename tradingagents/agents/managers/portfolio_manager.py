@@ -49,6 +49,33 @@ from tradingagents.agents.utils.structured import (
 )
 
 
+# Mirrors research_manager.py's two scales (see the comment there): the
+# original wording describes managing a position that exists, which is wrong
+# for a name nothing is held in. The Research Manager rates first and this
+# node saw its rating in 46 of 46 debates -- so both nodes need the matching
+# scale, or the one that decides first keeps the position-management framing.
+HELD_REVIEW_SCALE = """**Rating Scale** (use exactly one):
+- **Buy**: Strong conviction to enter or add to position
+- **Overweight**: Favorable outlook, gradually increase exposure
+- **Hold**: Maintain current position, no action needed
+- **Underweight**: Reduce exposure, take partial profits
+- **Sell**: Exit position or avoid entry"""
+
+NEW_ENTRY_SCALE = """**Rating Scale** (use exactly one). Nothing is held in this name yet, so every tier describes whether and how to START a position:
+- **Buy**: Strong conviction; enter at full target weight
+- **Overweight**: Favorable outlook; enter at reduced size
+- **Underweight**: Do not enter; set rejection_category to the primary concern
+- **Hold**: Evidence genuinely balanced; do not enter now
+- **Sell**: Avoid this name; set rejection_category
+
+Both entry tiers open a real position, so size them for what you actually believe."""
+
+
+def rating_scale_for(evaluation_mode: str | None) -> str:
+    """The rating-scale block matching what the caller is deciding."""
+    return NEW_ENTRY_SCALE if evaluation_mode == "new_entry" else HELD_REVIEW_SCALE
+
+
 def create_portfolio_manager(llm):
     structured_llm = bind_structured(llm, PortfolioDecision, "Portfolio Manager")
 
@@ -73,6 +100,7 @@ def create_portfolio_manager(llm):
         # 2026-09-04 -- see this module's docstring.
         pm_size_range_low = state.get("pm_size_range_low") or 0.5
         pm_size_range_high = state.get("pm_size_range_high") or 2.0
+        rating_scale = rating_scale_for(state.get("evaluation_mode"))
         sizing_context_line = ""
         if total_capital_usd and max_positions:
             baseline_usd = total_capital_usd / max_positions
@@ -95,12 +123,7 @@ def create_portfolio_manager(llm):
 
 ---
 
-**Rating Scale** (use exactly one):
-- **Buy**: Strong conviction to enter or add to position
-- **Overweight**: Favorable outlook, gradually increase exposure
-- **Hold**: Maintain current position, no action needed
-- **Underweight**: Reduce exposure, take partial profits
-- **Sell**: Exit position or avoid entry
+{rating_scale}
 
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
@@ -110,6 +133,10 @@ def create_portfolio_manager(llm):
 {history}
 
 ---
+
+The Research Manager's rating above is a recommendation, not a constraint: it
+was formed before the risk analysts spoke. Where their debate supports a
+different conclusion, say so and rate accordingly.
 
 Be decisive and ground every conclusion in specific evidence from the analysts.
 Set concrete stop_loss/take_profit/position_size_usd values — consider the

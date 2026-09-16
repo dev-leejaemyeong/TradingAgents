@@ -426,6 +426,7 @@ class TradingAgentsGraph:
         extra_context: str = "",
         pm_size_range_low: float | None = None,
         pm_size_range_high: float | None = None,
+        evaluation_mode: str | None = None,
     ):
         """Run the trading agents graph for a company on a specific date.
 
@@ -448,6 +449,11 @@ class TradingAgentsGraph:
         Portfolio Manager (the only agent that reads ``past_context``,
         portfolio_manager.py) sees it with no prompt-template change.
         Defaults to "" (existing callers unaffected).
+
+        ``evaluation_mode`` (2026-09-16): "new_entry" when nothing is held
+        yet, "held_review" when re-underwriting an open position -- selects
+        the rating-scale wording the Research Manager and Portfolio Manager
+        are given. None keeps the original wording.
 
         ``pm_size_range_low``/``pm_size_range_high`` (2026-09-04): forwarded
         to the initial state for the PM prompt's sizing-range guidance --
@@ -495,6 +501,7 @@ class TradingAgentsGraph:
                 extra_context=extra_context,
                 pm_size_range_low=pm_size_range_low,
                 pm_size_range_high=pm_size_range_high,
+                evaluation_mode=evaluation_mode,
             )
         finally:
             if self._checkpointer_ctx is not None:
@@ -527,6 +534,7 @@ class TradingAgentsGraph:
         extra_context: str = "",
         pm_size_range_low: float | None = None,
         pm_size_range_high: float | None = None,
+        evaluation_mode: str | None = None,
     ):
         """Execute the graph and write the resulting state to disk and memory log."""
         # Initialize state — inject memory log context for PM and the
@@ -545,6 +553,7 @@ class TradingAgentsGraph:
             max_positions=max_positions,
             pm_size_range_low=pm_size_range_low,
             pm_size_range_high=pm_size_range_high,
+            evaluation_mode=evaluation_mode,
         )
         args = self.propagator.get_graph_args(callbacks=self.callbacks)
 

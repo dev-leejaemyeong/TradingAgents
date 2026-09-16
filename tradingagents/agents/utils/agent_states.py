@@ -99,3 +99,12 @@ class AgentState(MessagesState):
     # prompt text for any caller that doesn't pass these.
     pm_size_range_low: Annotated[float | None, "Lower bound (as a multiple of the equal-weight baseline) the PM prompt tells the PM to typically size within"]
     pm_size_range_high: Annotated[float | None, "Upper bound (as a multiple of the equal-weight baseline) the PM prompt tells the PM to typically size within"]
+
+    # 2026-09-16: which decision the graph is being asked for. The five-tier
+    # rating scale reads as position management ("maintain the current
+    # position", "take partial profits"), which is right for a review of
+    # something already held and wrong for a name the caller holds none of --
+    # there, three of the five tiers collapse into "do nothing". The Research
+    # Manager and Portfolio Manager render the scale that matches. None keeps
+    # the original wording, so any caller that does not set this is unaffected.
+    evaluation_mode: Annotated[str | None, "'new_entry' | 'held_review' | None (original wording)"]

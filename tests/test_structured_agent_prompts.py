@@ -105,6 +105,75 @@ def test_portfolio_manager_prompt_states_constraint():
     assert NO_EXTERNAL_TOOLS in _prompt_text(captured["prompt"])
 
 
+def _research_manager_prompt(captured, evaluation_mode):
+    from tradingagents.agents.schemas import PortfolioRating, ResearchPlan
+
+    llm = _capturing_llm(
+        captured,
+        ResearchPlan(recommendation=PortfolioRating.BUY, rationale="x", strategic_actions="y"),
+    )
+    create_research_manager(llm)({
+        "company_of_interest": "NVDA",
+        "evaluation_mode": evaluation_mode,
+        "investment_debate_state": {
+            "history": "h", "bull_history": "b", "bear_history": "r",
+            "current_response": "", "judge_decision": "", "count": 1,
+        },
+    })
+    return _prompt_text(captured["prompt"])
+
+
+def _portfolio_manager_prompt(captured, evaluation_mode):
+    from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
+
+    llm = _capturing_llm(
+        captured,
+        PortfolioDecision(rating=PortfolioRating.HOLD, executive_summary="x", investment_thesis="y"),
+    )
+    create_portfolio_manager(llm)({
+        "company_of_interest": "NVDA",
+        "evaluation_mode": evaluation_mode,
+        "risk_debate_state": {
+            "history": "h", "aggressive_history": "a", "conservative_history": "c",
+            "neutral_history": "n", "current_aggressive_response": "",
+            "current_conservative_response": "", "current_neutral_response": "",
+            "latest_speaker": "Neutral", "count": 1,
+        },
+        "investment_plan": "plan",
+        "trader_investment_plan": "trader plan",
+    })
+    return _prompt_text(captured["prompt"])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("build", [_research_manager_prompt, _portfolio_manager_prompt])
+def test_new_entry_mode_rates_entries_not_position_changes(build):
+    # 2026-09-16: with nothing held, "maintain the current position" and "take
+    # partial profits" describe actions that do not exist, which left three of
+    # the five tiers meaning "do nothing".
+    prompt = build({}, "new_entry")
+    assert "enter at reduced size" in prompt.lower()
+    assert "maintain the current position" not in prompt
+    assert "take partial profits" not in prompt
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("build", [_research_manager_prompt, _portfolio_manager_prompt])
+def test_held_review_and_unset_keep_the_position_management_wording(build):
+    held = build({}, "held_review")
+    unset = build({}, None)
+    assert "enter at reduced size" not in held.lower()
+    assert held == unset  # an unset caller sees exactly the original prompt
+
+
+@pytest.mark.unit
+def test_portfolio_manager_is_told_it_may_differ_from_the_research_manager():
+    # 2026-09-16: the PM matched the Research Manager's rating in 46 of 46
+    # debates while being shown that rating and never told it could differ.
+    prompt = _portfolio_manager_prompt({}, "new_entry")
+    assert "recommendation, not a constraint" in prompt
+
+
 @pytest.mark.unit
 def test_sentiment_prompt_states_constraint(monkeypatch):
     from tradingagents.agents.schemas import SentimentBand, SentimentReport

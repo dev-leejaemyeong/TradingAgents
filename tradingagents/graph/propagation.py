@@ -26,6 +26,7 @@ class Propagator:
         max_positions: int | None = None,
         pm_size_range_low: float | None = None,
         pm_size_range_high: float | None = None,
+        evaluation_mode: str | None = None,
     ) -> dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -44,6 +45,11 @@ class Propagator:
         multiple-of-baseline range the PM prompt tells the PM to typically
         size within -- see portfolio_manager.py's docstring for why this is
         threaded through rather than hardcoded in the prompt text.
+
+        ``evaluation_mode`` (2026-09-16): ``"new_entry"`` when nothing is held
+        yet, ``"held_review"`` when re-underwriting an open position. Selects
+        the rating-scale wording in the Research Manager and Portfolio Manager
+        prompts; ``None`` keeps the original, position-management wording.
         """
         return {
             "messages": [("human", company_name)],
@@ -56,6 +62,7 @@ class Propagator:
             "max_positions": max_positions,
             "pm_size_range_low": pm_size_range_low,
             "pm_size_range_high": pm_size_range_high,
+            "evaluation_mode": evaluation_mode,
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",
