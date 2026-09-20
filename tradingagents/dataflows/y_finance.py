@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from typing import Annotated
 
@@ -271,6 +272,83 @@ def get_stockstats_indicator(
     return str(indicator_value)
 
 
+
+# Alpha Vantage OVERVIEW fields yfinance's `info` has no equivalent for
+# (2026-09-21, measured side by side -- see DESIGN.md "AV vs yfinance 벤더
+# 비교"). Label -> OVERVIEW key. Deliberately excludes anything yfinance
+# already reports: the overlapping numbers agree (ROE 0.666 vs 0.66638,
+# market cap 1147237564000 vs ...416), so repeating them would only add
+# tokens and invite the model to treat two spellings of one number as two
+# facts.
+_AV_SUPPLEMENT_FIELDS = (
+    # Which quarter these figures are actually from. yfinance reports none of
+    # this, so nothing downstream could tell a fresh balance sheet from one
+    # four months old -- and "quality" was the single most common PM
+    # rejection reason (10 of 56 debates) while that was unknowable.
+    ("Latest Quarter", "LatestQuarter"),
+    # Analyst consensus: a signal the pipeline has nowhere else. Measured
+    # across 17 tickers spanning ranks 1-1300, the target premium is NOT a
+    # uniform bullish tilt -- median +18.4%, but 5 of 17 sit *below* the
+    # current price and 5 carry Sell-side opinions. It discriminates, which
+    # is why it is worth carrying; it is passed through unlabelled, since an
+    # editorial "beware, optimistic" note would be our own unmeasured spin.
+    ("Analyst Target Price", "AnalystTargetPrice"),
+    ("Analyst Ratings (Strong Buy)", "AnalystRatingStrongBuy"),
+    ("Analyst Ratings (Buy)", "AnalystRatingBuy"),
+    ("Analyst Ratings (Hold)", "AnalystRatingHold"),
+    ("Analyst Ratings (Sell)", "AnalystRatingSell"),
+    ("Analyst Ratings (Strong Sell)", "AnalystRatingStrongSell"),
+    # Rates of change -- the screener's factors are level snapshots and
+    # cannot see these at all.
+    ("Quarterly Earnings Growth YoY", "QuarterlyEarningsGrowthYOY"),
+    ("Quarterly Revenue Growth YoY", "QuarterlyRevenueGrowthYOY"),
+    # Same axis as the screener's valuation_yield (EBITDA/EV), so a debate can
+    # cross-check the ranking's own valuation read instead of taking it.
+    ("EV to EBITDA", "EVToEBITDA"),
+    ("EV to Revenue", "EVToRevenue"),
+    # Float and ownership: another axis missing everywhere in the pipeline.
+    ("Shares Float", "SharesFloat"),
+    ("Percent Insiders", "PercentInsiders"),
+    ("Percent Institutions", "PercentInstitutions"),
+)
+
+# Alpha Vantage writes "-" or "None" into OVERVIEW for a field it has no value
+# for, and those must not reach the report as if they were data.
+_AV_EMPTY_VALUES = {"", "-", "None", "null", "NaN"}
+
+
+def _alpha_vantage_supplement(symbol: str) -> list[str]:
+    """Alpha Vantage OVERVIEW fields that yfinance does not carry, as
+    "Label: value" lines (2026-09-21).
+
+    Adds one HTTP request per fundamentals call and about 460 characters
+    (~115 tokens) to a report that already runs ~16,000 -- against a measured
+    quota of at least 1,384 calls a day, neither is a constraint.
+
+    Silent on any failure. A missing supplement is a smaller loss than a
+    fundamentals report that fails outright because a secondary vendor was
+    down, and this mirrors the news chain's posture (route_to_vendor falls
+    through on a rate limit or entitlement gap rather than erroring).
+    """
+    try:
+        from .alpha_vantage_fundamentals import get_fundamentals as _av_fundamentals
+
+        raw = _av_fundamentals(symbol)
+        overview = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(overview, dict):
+            return []
+    except Exception:  # noqa: BLE001 - a supplement must never break the report
+        return []
+
+    lines = []
+    for label, key in _AV_SUPPLEMENT_FIELDS:
+        value = overview.get(key)
+        if value is None or str(value).strip() in _AV_EMPTY_VALUES:
+            continue
+        lines.append(f"{label}: {value}")
+    return lines
+
+
 def get_fundamentals(
     ticker: Annotated[str, "ticker symbol of the company"],
     curr_date: Annotated[str, "current date (not used for yfinance)"] = None
@@ -326,6 +404,8 @@ def get_fundamentals(
         # agent might fabricate around.
         if not lines:
             raise NoMarketDataError(ticker, canonical, "no fundamental fields returned")
+
+        lines.extend(_alpha_vantage_supplement(canonical))
 
         header = f"# Company Fundamentals for {canonical}\n"
         header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
