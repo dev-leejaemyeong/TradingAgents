@@ -101,6 +101,29 @@ def create_portfolio_manager(llm):
         pm_size_range_low = state.get("pm_size_range_low") or 0.5
         pm_size_range_high = state.get("pm_size_range_high") or 2.0
         rating_scale = rating_scale_for(state.get("evaluation_mode"))
+        # 2026-09-22 (TODOS #166): the forced-exit horizon, which the PM was
+        # never told. Measured before adding it: of 16 debates where the PM
+        # stated a holding period, 15 were longer than the cap in force
+        # ("3-6 months" five times, "12-18 months", "13-14 months") and one
+        # fitted -- so stop/take levels and sizing were being set against a
+        # thesis the system would close at a fraction of its horizon.
+        #
+        # Deliberately states only the horizon. The candidate's volatility is
+        # already in front of the PM -- the market analyst supplies ATR in 60
+        # of 61 debates and the PM mentions volatility in 3 -- so repeating it
+        # in a second place was judged unlikely to change anything by itself.
+        # That half waits for this one to be measured first
+        # (DATA_VALIDATION_QUEUE.md), so the two changes do not land together
+        # and become impossible to tell apart.
+        max_hold_days = state.get("max_hold_days")
+        horizon_line = (
+            f"- Holding horizon: this position is force-closed {max_hold_days} calendar "
+            f"days after entry regardless of how the thesis is developing. Set "
+            f"stop_loss/take_profit and size for that window, and say so explicitly "
+            f"if your conviction actually needs longer than it.\n"
+            if max_hold_days
+            else ""
+        )
         sizing_context_line = ""
         if total_capital_usd and max_positions:
             baseline_usd = total_capital_usd / max_positions
@@ -128,7 +151,7 @@ def create_portfolio_manager(llm):
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
-{sizing_context_line}{lessons_line}
+{horizon_line}{sizing_context_line}{lessons_line}
 **Risk Analysts Debate History:**
 {history}
 

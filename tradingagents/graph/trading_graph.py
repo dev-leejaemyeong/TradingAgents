@@ -423,6 +423,7 @@ class TradingAgentsGraph:
         asset_type: str = "stock",
         total_capital_usd: float | None = None,
         max_positions: int | None = None,
+        max_hold_days: int | None = None,
         extra_context: str = "",
         pm_size_range_low: float | None = None,
         pm_size_range_high: float | None = None,
@@ -449,6 +450,10 @@ class TradingAgentsGraph:
         Portfolio Manager (the only agent that reads ``past_context``,
         portfolio_manager.py) sees it with no prompt-template change.
         Defaults to "" (existing callers unaffected).
+
+        ``max_hold_days`` (2026-09-22): forwarded to the initial state so the
+        Portfolio Manager is told the forced-exit horizon it has to work
+        inside -- see portfolio_manager.py. None keeps the prompt unchanged.
 
         ``evaluation_mode`` (2026-09-16): "new_entry" when nothing is held
         yet, "held_review" when re-underwriting an open position -- selects
@@ -498,6 +503,7 @@ class TradingAgentsGraph:
                 asset_type=asset_type,
                 total_capital_usd=total_capital_usd,
                 max_positions=max_positions,
+                max_hold_days=max_hold_days,
                 extra_context=extra_context,
                 pm_size_range_low=pm_size_range_low,
                 pm_size_range_high=pm_size_range_high,
@@ -531,6 +537,7 @@ class TradingAgentsGraph:
         asset_type: str = "stock",
         total_capital_usd: float | None = None,
         max_positions: int | None = None,
+        max_hold_days: int | None = None,
         extra_context: str = "",
         pm_size_range_low: float | None = None,
         pm_size_range_high: float | None = None,
@@ -551,6 +558,7 @@ class TradingAgentsGraph:
             instrument_context=instrument_context,
             total_capital_usd=total_capital_usd,
             max_positions=max_positions,
+            max_hold_days=max_hold_days,
             pm_size_range_low=pm_size_range_low,
             pm_size_range_high=pm_size_range_high,
             evaluation_mode=evaluation_mode,

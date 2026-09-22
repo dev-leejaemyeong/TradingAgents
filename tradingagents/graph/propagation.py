@@ -24,6 +24,7 @@ class Propagator:
         instrument_context: str = "",
         total_capital_usd: float | None = None,
         max_positions: int | None = None,
+        max_hold_days: int | None = None,
         pm_size_range_low: float | None = None,
         pm_size_range_high: float | None = None,
         evaluation_mode: str | None = None,
@@ -40,6 +41,12 @@ class Propagator:
         the Portfolio Manager's equal-weight sizing baseline (office-hours
         design session, 2026-08-08) -- see portfolio_manager.py's docstring
         for why ``available_budget_usd`` is deliberately excluded here.
+
+        ``max_hold_days`` (2026-09-22): the calendar-day horizon after which
+        the position is force-closed regardless of thesis -- the PM sets
+        stop_loss/take_profit and sizes against it. Previously not passed at
+        all, so the PM routinely reasoned over 6-18 month theses the system
+        would close at 90 days.
 
         ``pm_size_range_low``/``pm_size_range_high`` (2026-09-04): the
         multiple-of-baseline range the PM prompt tells the PM to typically
@@ -60,6 +67,7 @@ class Propagator:
             "past_context": past_context,
             "total_capital_usd": total_capital_usd,
             "max_positions": max_positions,
+            "max_hold_days": max_hold_days,
             "pm_size_range_low": pm_size_range_low,
             "pm_size_range_high": pm_size_range_high,
             "evaluation_mode": evaluation_mode,

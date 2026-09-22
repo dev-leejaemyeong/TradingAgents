@@ -89,6 +89,9 @@ class AgentState(MessagesState):
     # portfolio_manager.py's docstring)
     total_capital_usd: Annotated[float | None, "Total portfolio capital, for the PM's equal-weight sizing baseline"]
     max_positions: Annotated[int | None, "Configured max open positions, for the PM's equal-weight sizing baseline"]
+    # 2026-09-22: the forced-exit horizon. Of 16 debates where the PM stated
+    # a holding period, 15 were longer than the cap it was never told about.
+    max_hold_days: Annotated[int | None, "Calendar days after which the position is force-closed"]
 
     # 2026-09-04: single source of truth for the PM prompt's "typically
     # within roughly Nx-Mx the baseline" sizing guidance, previously a
