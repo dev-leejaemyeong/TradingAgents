@@ -121,6 +121,25 @@ class TestNullishFloatCoercion:
             assert d.take_profit is None
             assert d.position_size_usd is None
 
+    def test_pm_nullish_hold_days_coerces_to_none(self):
+        for sentinel in ("None", "N/A", "null", "-", "", "TBD"):
+            d = PortfolioDecision(
+                rating=PortfolioRating.OVERWEIGHT,
+                executive_summary="s",
+                investment_thesis="t",
+                hold_days=sentinel,
+            )
+            assert d.hold_days is None
+
+    def test_pm_hold_days_real_int_string_parses(self):
+        d = PortfolioDecision(
+            rating=PortfolioRating.OVERWEIGHT,
+            executive_summary="s",
+            investment_thesis="t",
+            hold_days="90",
+        )
+        assert d.hold_days == 90
+
 
 @pytest.mark.unit
 class TestRenderResearchPlan:

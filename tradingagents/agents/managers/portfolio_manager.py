@@ -115,12 +115,17 @@ def create_portfolio_manager(llm):
         # That half waits for this one to be measured first
         # (DATA_VALIDATION_QUEUE.md), so the two changes do not land together
         # and become impossible to tell apart.
+        # 2026-09-22 (TODOS #166 item 2): hold_days lets the PM shorten this
+        # per-ticker -- a value longer than max_hold_days is silently
+        # clamped back down downstream (position_sizer.clamp_hold_days()),
+        # so this is a ceiling, not a target the PM can extend.
         max_hold_days = state.get("max_hold_days")
         horizon_line = (
             f"- Holding horizon: this position is force-closed {max_hold_days} calendar "
             f"days after entry regardless of how the thesis is developing. Set "
-            f"stop_loss/take_profit and size for that window, and say so explicitly "
-            f"if your conviction actually needs longer than it.\n"
+            f"stop_loss/take_profit and size for that window. If your conviction "
+            f"calls for closing it out sooner than that, say so with the hold_days "
+            f"field -- a longer number there cannot extend the {max_hold_days}-day cap.\n"
             if max_hold_days
             else ""
         )

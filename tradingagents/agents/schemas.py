@@ -51,6 +51,18 @@ def _coerce_optional_float(value):
     return cleaned or None
 
 
+def _coerce_optional_int(value):
+    """Same nullish-placeholder treatment as ``_coerce_optional_float``, for
+    an optional integer field (``hold_days``)."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text.lower() in _NULLISH_FLOAT:
+        return None
+    cleaned = text.replace(",", "").strip()
+    return cleaned or None
+
+
 # Schema-level sanity ceiling on position_size_usd. This is not a real budget
 # constraint -- that is clamp_to_budget()'s job (position_sizer.py), which
 # knows the account's actual available cash at call time. This ceiling only
@@ -259,9 +271,22 @@ class PortfolioDecision(BaseModel):
         gt=0,
         description="Optional target price in the instrument's quote currency.",
     )
-    time_horizon: str | None = Field(
+    # Structured replacement for a prior free-text time_horizon field
+    # ("3-6 months") -- unparseable into a date, so nothing downstream could
+    # ever act on it (TODOS #166 item 2). This is a whole number of calendar
+    # days instead, and the field description below is sent to the LLM
+    # verbatim as its output instructions (see this module's docstring).
+    hold_days: int | None = Field(
         default=None,
-        description="Optional recommended holding period, e.g. '3-6 months'.",
+        ge=1,
+        description=(
+            "Optional suggested holding period for this position, as a whole "
+            "number of calendar days. The system enforces a hard maximum "
+            "regardless of this value (stated above, when a cap is in force) "
+            "-- a number longer than that cap is silently clamped down to it, "
+            "so only set this to signal a SHORTER horizon than the cap. Leave "
+            "unset if the full cap fits your conviction."
+        ),
     )
     stop_loss: float | None = Field(
         default=None,
@@ -323,6 +348,11 @@ class PortfolioDecision(BaseModel):
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
 
+    @field_validator("hold_days", mode="before")
+    @classmethod
+    def _nullish_hold_days_to_none(cls, v):
+        return _coerce_optional_int(v)
+
     @field_validator("rejection_category", mode="before")
     @classmethod
     def _invalid_rejection_category_to_none(cls, v):
@@ -361,8 +391,8 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     ]
     if decision.price_target is not None:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])
-    if decision.time_horizon:
-        parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
+    if decision.hold_days is not None:
+        parts.extend(["", f"**Suggested Hold**: {decision.hold_days} days"])
     if decision.stop_loss is not None:
         parts.extend(["", f"**Stop Loss**: {decision.stop_loss}"])
     if decision.take_profit is not None:
