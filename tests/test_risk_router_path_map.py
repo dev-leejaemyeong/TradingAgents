@@ -79,3 +79,106 @@ def test_debate_path_map_covers_full_router_range():
     }
     assert returns <= set(DEBATE_PATH_MAP)
     assert "Research Manager" in returns  # terminal reachable
+
+
+# --- who opens the bull/bear debate (2026-09-22) ----------------------------
+
+from tradingagents.graph.conditional_logic import debate_first_speaker
+
+
+@pytest.mark.unit
+def test_first_speaker_is_deterministic_and_routable():
+    a = debate_first_speaker("VST", "2026-09-21")
+    assert a == debate_first_speaker("VST", "2026-09-21")
+    assert a in DEBATE_PATH_MAP and a != "Research Manager"
+
+
+@pytest.mark.unit
+def test_first_speaker_is_roughly_balanced():
+    """Alternation must actually alternate -- a hash that always says Bull
+    would silently keep the old bias while looking like it was fixed."""
+    picks = [debate_first_speaker(f"T{i}", "2026-09-21") for i in range(400)]
+    bull = picks.count("Bull Researcher")
+    assert 150 < bull < 250, bull
+
+
+@pytest.mark.unit
+def test_first_speaker_varies_with_date_for_same_ticker():
+    picks = {debate_first_speaker("VST", f"2026-09-{d:02d}") for d in range(1, 29)}
+    assert picks == {"Bull Researcher", "Bear Researcher"}
+
+
+@pytest.mark.unit
+def test_first_debate_speaker_reads_ticker_and_date_from_state():
+    logic = ConditionalLogic()
+    state = {"company_of_interest": "VST", "trade_date": "2026-09-21"}
+    assert logic.first_debate_speaker(state) == debate_first_speaker("VST", "2026-09-21")
+
+
+def _run_stubbed_graph(monkeypatch, ticker, trade_date):
+    """Compile the real GraphSetup wiring with stub nodes and run it, returning
+    the order the two researchers actually spoke in."""
+    from langchain_core.messages import AIMessage
+    from tradingagents.graph import setup as graph_setup_module
+
+    spoken = []
+
+    def researcher(label):
+        def factory(llm, cache_role_and_resources=True):
+            def node(state):
+                d = state["investment_debate_state"]
+                spoken.append(label)
+                return {"investment_debate_state": {
+                    **d, "current_response": f"{label} Analyst: x", "count": d["count"] + 1,
+                }}
+            return node
+        return factory
+
+    def risk(name):
+        def factory(llm, cache_role_and_resources=True):
+            def node(state):
+                r = state["risk_debate_state"]
+                return {"risk_debate_state": {**r, "latest_speaker": name, "count": r["count"] + 1}}
+            return node
+        return factory
+
+    noop = lambda *a, **k: (lambda state: {})  # noqa: E731
+    stubs = {
+        "create_bull_researcher": researcher("Bull"),
+        "create_bear_researcher": researcher("Bear"),
+        "create_aggressive_debator": risk("Aggressive"),
+        "create_conservative_debator": risk("Conservative"),
+        "create_neutral_debator": risk("Neutral"),
+        "create_market_analyst": lambda llm: (lambda state: {"messages": [AIMessage(content="m")]}),
+        "create_msg_delete": lambda: (lambda state: {}),
+        "create_research_manager": noop,
+        "create_trader": noop,
+        "create_portfolio_manager": noop,
+    }
+    for target, stub in stubs.items():
+        monkeypatch.setattr(graph_setup_module, target, stub)
+
+    workflow = graph_setup_module.GraphSetup(
+        quick_thinking_llm="Q", deep_thinking_llm="D",
+        tool_nodes={"market": lambda state: state},
+        conditional_logic=ConditionalLogic(max_debate_rounds=1, max_risk_discuss_rounds=1),
+    ).setup_graph(selected_analysts=("market",))
+    workflow.compile().invoke({
+        "messages": [], "company_of_interest": ticker, "trade_date": trade_date,
+        "investment_debate_state": {"current_response": "", "count": 0},
+        "risk_debate_state": {"latest_speaker": "", "count": 0},
+    })
+    return spoken
+
+
+def _ticker_opening_with(side):
+    return next(
+        f"T{i}" for i in range(100)
+        if debate_first_speaker(f"T{i}", "2026-09-21") == f"{side} Researcher"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("side,expected", [("Bull", ["Bull", "Bear"]), ("Bear", ["Bear", "Bull"])])
+def test_real_graph_wiring_runs_opener_then_the_other_exactly_once_each(monkeypatch, side, expected):
+    assert _run_stubbed_graph(monkeypatch, _ticker_opening_with(side), "2026-09-21") == expected

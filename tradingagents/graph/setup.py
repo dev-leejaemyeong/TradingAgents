@@ -179,11 +179,17 @@ class GraphSetup:
             )
             workflow.add_edge(current_tools, current_analyst)
 
-            # Connect to next analyst or to Bull Researcher if this is the last analyst
+            # Connect to next analyst or, after the last one, into the bull/bear
+            # debate -- whichever researcher opens is chosen per ticker+date
+            # (conditional_logic.debate_first_speaker()).
             if i < len(plan.specs) - 1:
                 workflow.add_edge(current_clear, plan.specs[i + 1].agent_node)
             else:
-                workflow.add_edge(current_clear, "Bull Researcher")
+                workflow.add_conditional_edges(
+                    current_clear,
+                    self.conditional_logic.first_debate_speaker,
+                    DEBATE_PATH_MAP,
+                )
 
         # Both research-debate edges share the complete DEBATE_PATH_MAP (#1088).
         for debate_node in ("Bull Researcher", "Bear Researcher"):

@@ -1,6 +1,24 @@
 # TradingAgents/graph/conditional_logic.py
 
+import hashlib
+
 from tradingagents.agents.utils.agent_states import AgentState
+
+
+def debate_first_speaker(ticker: str, trade_date: str) -> str:
+    """Which researcher opens the bull/bear debate for this ticker+date
+    (2026-09-22). With max_debate_rounds == 1 the opener never sees the
+    other side's argument while the second speaker rebuts it, so a fixed
+    Bull-first order handed the last word to Bear in every debate. Alternating
+    the opener turns that systematic tilt into noise, and makes it measurable
+    later (accept rate by who spoke last).
+
+    Deterministic (sha256, not the per-process-randomized ``hash()``) so an
+    analysis script can recompute the order for any past debate from
+    ``(ticker, debate_date)`` alone -- no column stored on the debates row.
+    """
+    digest = hashlib.sha256(f"{ticker}|{trade_date}".encode("utf-8")).digest()
+    return "Bull Researcher" if digest[0] % 2 == 0 else "Bear Researcher"
 
 
 class ConditionalLogic:
@@ -48,6 +66,10 @@ class ConditionalLogic:
         if last_message.tool_calls:
             return "tools_fundamentals"
         return "Msg Clear Fundamentals"
+
+    def first_debate_speaker(self, state: AgentState) -> str:
+        """Entry router into the bull/bear debate -- see debate_first_speaker()."""
+        return debate_first_speaker(state["company_of_interest"], str(state["trade_date"]))
 
     def should_continue_debate(self, state: AgentState) -> str:
         """Determine if debate should continue."""
