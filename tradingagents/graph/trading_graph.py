@@ -428,6 +428,8 @@ class TradingAgentsGraph:
         pm_size_range_low: float | None = None,
         pm_size_range_high: float | None = None,
         evaluation_mode: str | None = None,
+        observation_only: bool = False,
+        past_context_override: str | None = None,
     ):
         """Run the trading agents graph for a company on a specific date.
 
@@ -466,6 +468,27 @@ class TradingAgentsGraph:
         portfolio_manager.py resolves to the same 0.5/2.0 the prompt text
         hardcoded before this (existing callers unaffected).
 
+        ``observation_only``/``past_context_override`` (2026-09-24, TODOS
+        #173/A0-2a): support a same-input immediate re-run of a completed
+        debate for consistency measurement (the caller runs propagate() a
+        second and third time with the same ticker/date/extra_context right
+        after the first, to see whether the PM's rating holds). Without these,
+        a re-run isn't actually the same input and isn't side-effect-free:
+        ``observation_only=True`` skips the three effects propagate() has
+        beyond returning a value -- ``_resolve_pending_entries()`` (could
+        resolve a pending reflection the original run's own call didn't,
+        changing the memory context an identical-looking re-run would see),
+        ``store_decision()`` (would append a duplicate pending entry), and
+        ``_log_state()`` (would overwrite the original run's
+        ``full_states_log_{date}.json``). ``past_context_override``, when not
+        None, replaces the ``get_past_context()`` lookup (and the
+        ``extra_context`` concatenation onto it) entirely -- the caller passes
+        the exact ``past_context`` string the original run's initial state
+        used, so a re-run sees identical memory-log content even if the log
+        file changed in between (and doesn't need its own ``extra_context``,
+        since the override already includes it, having been built the same
+        way originally).
+
         Returns ``(final_state, signal)`` where ``signal`` is one of the 5-tier
         ratings (Buy / Overweight / Hold / Underweight / Sell) or ``"REVIEW"``
         when the decision had no parseable rating (upstream #1170, ported
@@ -475,7 +498,8 @@ class TradingAgentsGraph:
         self.ticker = company_name
 
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
-        self._resolve_pending_entries(company_name)
+        if not observation_only:
+            self._resolve_pending_entries(company_name)
 
         # Recompile with a checkpointer if the user opted in.
         if self.config.get("checkpoint_enabled"):
@@ -508,6 +532,8 @@ class TradingAgentsGraph:
                 pm_size_range_low=pm_size_range_low,
                 pm_size_range_high=pm_size_range_high,
                 evaluation_mode=evaluation_mode,
+                observation_only=observation_only,
+                past_context_override=past_context_override,
             )
         finally:
             if self._checkpointer_ctx is not None:
@@ -542,13 +568,23 @@ class TradingAgentsGraph:
         pm_size_range_low: float | None = None,
         pm_size_range_high: float | None = None,
         evaluation_mode: str | None = None,
+        observation_only: bool = False,
+        past_context_override: str | None = None,
     ):
         """Execute the graph and write the resulting state to disk and memory log."""
         # Initialize state — inject memory log context for PM and the
         # deterministically resolved instrument identity for all agents.
-        past_context = self.memory_log.get_past_context(company_name)
-        if extra_context:
-            past_context = f"{extra_context}\n\n{past_context}" if past_context else extra_context
+        if past_context_override is not None:
+            # Re-run of an already-completed debate (TODOS #173/A0-2a): reuse
+            # the exact past_context the original run built, instead of
+            # rebuilding it from get_past_context() + extra_context -- the
+            # memory log may have changed since, and extra_context is already
+            # folded into the override.
+            past_context = past_context_override
+        else:
+            past_context = self.memory_log.get_past_context(company_name)
+            if extra_context:
+                past_context = f"{extra_context}\n\n{past_context}" if past_context else extra_context
         instrument_context = self.resolve_instrument_context(company_name, asset_type)
         init_agent_state = self.propagator.create_initial_state(
             company_name,
@@ -596,15 +632,16 @@ class TradingAgentsGraph:
         # Store current state for reflection.
         self.curr_state = final_state
 
-        # Log state to disk.
-        self._log_state(trade_date, final_state)
+        if not observation_only:
+            # Log state to disk.
+            self._log_state(trade_date, final_state)
 
-        # Store decision for deferred reflection on the next same-ticker run.
-        self.memory_log.store_decision(
-            ticker=company_name,
-            trade_date=trade_date,
-            final_trade_decision=final_state["final_trade_decision"],
-        )
+            # Store decision for deferred reflection on the next same-ticker run.
+            self.memory_log.store_decision(
+                ticker=company_name,
+                trade_date=trade_date,
+                final_trade_decision=final_state["final_trade_decision"],
+            )
 
         # Clear checkpoint on successful completion to avoid stale state.
         if self.config.get("checkpoint_enabled"):
