@@ -107,8 +107,12 @@ def get_news_yfinance(
     canonical = normalize_symbol(ticker)
     resolved = "" if canonical == ticker else f" (resolved to {canonical})"
     try:
-        stock = yf.Ticker(canonical)
-        news = yf_retry(lambda: stock.get_news(count=article_limit))
+        # Ticker.get_news() reads an endpoint Yahoo withdrew (404, silently
+        # empty) as of 2026-10-02; yf.Search(...).news still works (confirmed
+        # live 2026-10-12) and is the same mechanism get_global_news_yfinance()
+        # already uses below.
+        search = yf_retry(lambda: yf.Search(canonical, news_count=article_limit))
+        news = search.news
 
         if not news:
             return f"No news found for {ticker}{resolved}"

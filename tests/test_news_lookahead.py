@@ -71,6 +71,27 @@ def test_offset_aware_timestamp_is_converted_not_truncated():
 
 
 @pytest.mark.unit
+def test_per_ticker_news_uses_search_not_broken_get_news(monkeypatch):
+    # Ticker.get_news() reads an endpoint Yahoo withdrew (404, silently empty)
+    # as of 2026-10-02; get_news_yfinance() must go through yf.Search() instead
+    # (the same mechanism get_global_news_yfinance() already uses), and still
+    # apply the look-ahead-safe window filter.
+    future_article = {"title": "FUTURE EVENT", "publisher": "P", "link": "l",
+                      "providerPublishTime": _epoch("2025-06-01")}
+    past_article = {"title": "PAST EVENT", "publisher": "P", "link": "l",
+                    "providerPublishTime": _epoch("2025-05-05")}
+
+    class FakeSearch:
+        def __init__(self, *a, **k):
+            self.news = [future_article, past_article]
+
+    monkeypatch.setattr(ynews.yf, "Search", FakeSearch)
+    out = ynews.get_news_yfinance("AAPL", "2025-05-01", "2025-05-09")
+    assert "PAST EVENT" in out
+    assert "FUTURE EVENT" not in out
+
+
+@pytest.mark.unit
 def test_global_news_future_flat_article_excluded(monkeypatch):
     # #1007: a flat, future-dated global article must not appear in a historical run.
     future_article = {"title": "FUTURE EVENT", "publisher": "P", "link": "l",
