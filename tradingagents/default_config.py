@@ -147,12 +147,12 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
         "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
         "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        # alpha_vantage first (structured NEWS_SENTIMENT: relevance + Bullish/
-        # Bearish score per article, TODOS.md #86), yfinance as the fallback --
-        # a rate limit or entitlement gap on alpha_vantage falls through
-        # automatically (route_to_vendor's VendorRateLimitError/
-        # VendorNotEntitledError handling), never a hard failure.
-        "news_data": "alpha_vantage,yfinance",  # Options: alpha_vantage, yfinance
+        # finnhub first (company-news with summaries, FINNHUB_API_KEY), yfinance
+        # as the fallback -- a missing key, rate limit, entitlement gap or empty
+        # result falls through automatically (route_to_vendor). alpha_vantage
+        # was first until 2026-10-12, when NEWS_SENTIMENT became premium-only
+        # for this key and every call failed (TODOS.md #86 / parent #189).
+        "news_data": "finnhub,yfinance",  # Options: finnhub, alpha_vantage, yfinance
         "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
         "prediction_markets": "manifold",  # Options: manifold, polymarket (both keyless; polymarket blocked from this deployment's network, TODOS.md #114)
         "earnings_calendar": "alpha_vantage",  # Options: alpha_vantage (TODOS.md #89)

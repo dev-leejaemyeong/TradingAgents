@@ -19,6 +19,7 @@ from .errors import (
     VendorNotEntitledError,
     VendorRateLimitError,
 )
+from .finnhub_news import get_news_finnhub
 from .fred import get_macro_data as get_fred_macro_data
 from .manifold import get_prediction_markets as get_manifold_prediction_markets
 from .polymarket import get_prediction_markets as get_polymarket_prediction_markets
@@ -92,6 +93,7 @@ VENDOR_LIST = [
     "polymarket",
     "manifold",
     "alpha_vantage",
+    "finnhub",
 ]
 
 # Optional enrichment categories. These add macro/event context to the news
@@ -132,6 +134,7 @@ VENDOR_METHODS = {
     },
     # news_data
     "get_news": {
+        "finnhub": get_news_finnhub,
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
     },
