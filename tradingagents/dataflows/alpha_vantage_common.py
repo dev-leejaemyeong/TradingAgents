@@ -6,7 +6,7 @@ from io import StringIO
 import pandas as pd
 import requests
 
-from .errors import VendorNotConfiguredError, VendorNotEntitledError, VendorRateLimitError
+from .errors import VendorError, VendorNotConfiguredError, VendorNotEntitledError, VendorRateLimitError
 
 API_BASE_URL = "https://www.alphavantage.co/query"
 
@@ -80,10 +80,11 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
         AlphaVantageNotEntitledError: When the endpoint needs a paid plan
     """
     # Create a copy of params to avoid modifying the original
+    api_key = get_api_key()
     api_params = params.copy()
     api_params.update({
         "function": function_name,
-        "apikey": get_api_key(),
+        "apikey": api_key,
         "source": "trading_agents",
     })
 
@@ -118,6 +119,10 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
     # ("your API key ... 25 requests per day").
     notice = response_json.get("Information") or response_json.get("Note")
     if notice:
+        # Alpha Vantage can echo the key back in these notices ("Thank you for
+        # using Alpha Vantage! Your API key <key> ..."); scrub it before the
+        # notice becomes part of an exception message that reaches logs/incidents.
+        notice = notice.replace(api_key, "***") if api_key else notice
         low = notice.lower()
         if "premium" in low:
             # E.g. TIME_SERIES_DAILY_ADJUSTED: "This is a premium endpoint."
@@ -130,6 +135,15 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
             # Reuse the existing "not configured" error so a bad key surfaces as
             # a real, actionable failure rather than a mislabeled rate limit (#991).
             raise AlphaVantageNotConfiguredError(f"Alpha Vantage API key invalid or missing: {notice}")
+
+    # A call it rejects comes back as {"Error Message": ...}, for an unknown
+    # symbol and for a malformed call alike, so it says nothing about the
+    # instrument -- without this it was returned as response_text and served
+    # downstream as if it were data.
+    rejection = response_json.get("Error Message")
+    if rejection:
+        rejection = rejection.replace(api_key, "***") if api_key else rejection
+        raise VendorError(f"Alpha Vantage rejected the request: {rejection}")
 
     return response_text
 

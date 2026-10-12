@@ -22,21 +22,27 @@ def _as_utc(dt: datetime) -> datetime:
 
 
 def _extract_article_data(article: dict) -> dict:
-    """Extract article data from yfinance news format (handles nested 'content' structure)."""
+    """Extract article data from yfinance news format (handles nested 'content' structure).
+
+    Yahoo sends some fields as null rather than leaving them out, so each falls
+    back to its default on a null as well as on a missing key -- a plain
+    ``.get(key, default)`` only applies ``default`` when the key is absent, not
+    when its value is ``None`` (upstream #1458).
+    """
     # Handle nested content structure
     if "content" in article:
         content = article["content"]
-        title = content.get("title", "No title")
-        summary = content.get("summary", "")
-        provider = content.get("provider", {})
-        publisher = provider.get("displayName", "Unknown")
+        title = content.get("title") or "No title"
+        summary = content.get("summary") or ""
+        provider = content.get("provider") or {}
+        publisher = provider.get("displayName") or "Unknown"
 
         # Get URL from canonicalUrl or clickThroughUrl
         url_obj = content.get("canonicalUrl") or content.get("clickThroughUrl") or {}
-        link = url_obj.get("url", "")
+        link = url_obj.get("url") or ""
 
         # Get publish date
-        pub_date_str = content.get("pubDate", "")
+        pub_date_str = content.get("pubDate") or ""
         pub_date = None
         if pub_date_str:
             with contextlib.suppress(ValueError, AttributeError):
@@ -61,10 +67,10 @@ def _extract_article_data(article: dict) -> dict:
             with contextlib.suppress(ValueError, OSError, TypeError):
                 pub_date = datetime.fromtimestamp(ts, tz=timezone.utc)
         return {
-            "title": article.get("title", "No title"),
-            "summary": article.get("summary", ""),
-            "publisher": article.get("publisher", "Unknown"),
-            "link": article.get("link", ""),
+            "title": article.get("title") or "No title",
+            "summary": article.get("summary") or "",
+            "publisher": article.get("publisher") or "Unknown",
+            "link": article.get("link") or "",
             "pub_date": pub_date,
         }
 

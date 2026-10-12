@@ -201,3 +201,25 @@ def test_global_news_empty_after_filter_is_informative(monkeypatch):
     out = ynews.get_global_news_yfinance("2025-05-09", look_back_days=7, limit=10)
     assert "No global news found" in out
     assert "###" not in out  # no empty article body
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("field", ["title", "summary", "provider", "canonicalUrl", "pubDate"])
+def test_a_nested_article_with_a_null_field_is_read_with_its_default(field):
+    # Yahoo sends some fields as null rather than leaving them out (#1458); a
+    # plain .get(key, default) only applies default when the key is absent.
+    content = {"title": "T", "summary": "S", "provider": {"displayName": "P"},
+               "canonicalUrl": {"url": "https://x"}, "pubDate": "2026-09-22T10:00:00Z", field: None}
+    data = ynews._extract_article_data({"content": content})
+    assert isinstance(data["title"], str) and isinstance(data["summary"], str)
+    assert isinstance(data["publisher"], str) and isinstance(data["link"], str)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("field", ["title", "summary", "publisher", "link"])
+def test_a_flat_article_with_a_null_field_is_read_with_its_default(field):
+    data = ynews._extract_article_data({
+        "title": "T", "summary": "S", "publisher": "P", "link": "L",
+        "providerPublishTime": _epoch("2026-09-22"), field: None,
+    })
+    assert all(isinstance(data[k], str) for k in ("title", "summary", "publisher", "link"))

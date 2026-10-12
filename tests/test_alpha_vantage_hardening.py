@@ -80,6 +80,37 @@ def test_premium_endpoint_not_mislabeled_as_rate_limit(monkeypatch):
 
 
 @pytest.mark.unit
+def test_a_rejected_request_is_unavailable_not_data(monkeypatch):
+    # An unknown symbol or malformed call comes back as {"Error Message": ...},
+    # which says nothing about the instrument -- it must not be returned as
+    # response_text and served downstream as if it were real data.
+    from tradingagents.dataflows.errors import VendorError
+
+    body = '{"Error Message": "Invalid API call. Please retry or visit the documentation."}'
+    monkeypatch.setattr(av.requests, "get", _patched_get(body))
+    with pytest.raises(VendorError):
+        av._make_api_request("TIME_SERIES_DAILY", {"symbol": "BOGUS"})
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body", [
+    '{"Note": "Thank you for using key k-secret. API call frequency is 5 calls per minute."}',
+    '{"Information": "the apikey k-secret is invalid or missing."}',
+    '{"Error Message": "Invalid API call for key k-secret. Please retry."}',
+])
+def test_the_key_never_reaches_an_error_message(monkeypatch, body):
+    """Alpha Vantage can echo the key in its notices; error text reaches logs and incidents."""
+    from tradingagents.dataflows.errors import VendorError
+
+    monkeypatch.setenv("ALPHA_VANTAGE_API_KEY", "k-secret")
+    monkeypatch.setattr(av.requests, "get", _patched_get(body))
+
+    with pytest.raises(VendorError) as raised:
+        av._make_api_request("TIME_SERIES_DAILY", {"symbol": "AAPL"})
+    assert "k-secret" not in str(raised.value)
+
+
+@pytest.mark.unit
 def test_get_daily_close_parses_latest_row(monkeypatch):
     # TODOS.md #90: entrypoint.fetch_current_prices()'s Alpha Vantage
     # fallback -- TIME_SERIES_DAILY (free, unlike ADJUSTED) is CSV with the
