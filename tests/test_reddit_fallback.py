@@ -36,7 +36,7 @@ def _resp(read_fn):
         def __exit__(self_inner, *a):
             return False
 
-        def read(self_inner):
+        def read(self_inner, amt=None):
             return read_fn()
     return _Resp()
 
@@ -161,6 +161,23 @@ class TestRss429Backoff:
             reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
         slept.assert_called_once_with(12.0)
 
+    def test_retry_after_zero_is_honoured_not_treated_as_absent(self):
+        # A valid "Retry-After: 0" means retry at once; the old `val else None`
+        # treated the string "0" as falsy and waited the 5s headerless fallback.
+        err = HTTPError("url", 429, "Too Many Requests", {"Retry-After": "0"}, None)
+        with patch.object(reddit, "urlopen", side_effect=[err, _atom_resp()]), \
+             patch.object(reddit.time, "sleep") as slept:
+            reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
+        slept.assert_called_once_with(0.0)
+
+    def test_headerless_429_backoff_is_jittered_around_five_seconds(self):
+        err = HTTPError("url", 429, "Too Many Requests", {}, None)
+        with patch.object(reddit, "urlopen", side_effect=[err, _atom_resp()]), \
+             patch.object(reddit.time, "sleep") as slept:
+            reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
+        (wait,), _ = slept.call_args
+        assert 4.0 <= wait <= 6.0
+
 
 @pytest.mark.unit
 class TestChunkedTransferErrorsHandled:
@@ -176,6 +193,29 @@ class TestChunkedTransferErrorsHandled:
              patch.object(reddit, "_fetch_subreddit_rss", return_value=[]) as rss:
             reddit._fetch_subreddit_json("NVDA", "stocks", 5, 5.0)
         rss.assert_called_once()
+
+
+@pytest.mark.unit
+class TestFeedReadIsBounded:
+    """An oversized response must not be streamed fully into memory before
+    parsing -- it degrades through the same failure path as a malformed feed."""
+
+    def test_oversized_rss_body_returns_none_not_a_crash(self):
+        oversized = _resp(lambda: b"x" * (reddit._MAX_FEED_BYTES + 1))
+        with patch.object(reddit, "urlopen", return_value=oversized):
+            assert reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0) is None
+
+    def test_oversized_json_body_falls_back_to_rss(self):
+        oversized = _resp(lambda: b"x" * (reddit._MAX_FEED_BYTES + 1))
+        with patch.object(reddit, "urlopen", return_value=oversized), \
+             patch.object(reddit, "_fetch_subreddit_rss", return_value=[]) as rss:
+            reddit._fetch_subreddit_json("NVDA", "stocks", 5, 5.0)
+        rss.assert_called_once()
+
+    def test_feed_within_the_cap_is_read_normally(self):
+        with patch.object(reddit, "urlopen", return_value=_atom_resp()):
+            posts = reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
+        assert len(posts) == 2
 
 
 @pytest.mark.unit

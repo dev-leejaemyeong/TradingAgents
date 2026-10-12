@@ -119,6 +119,7 @@ def _run_stubbed_graph(monkeypatch, ticker, trade_date):
     """Compile the real GraphSetup wiring with stub nodes and run it, returning
     the order the two researchers actually spoke in."""
     from langchain_core.messages import AIMessage
+    from tradingagents.graph import parallel_analysts as parallel_analysts_module
     from tradingagents.graph import setup as graph_setup_module
 
     spoken = []
@@ -150,13 +151,15 @@ def _run_stubbed_graph(monkeypatch, ticker, trade_date):
         "create_conservative_debator": risk("Conservative"),
         "create_neutral_debator": risk("Neutral"),
         "create_market_analyst": lambda llm: (lambda state: {"messages": [AIMessage(content="m")]}),
-        "create_msg_delete": lambda: (lambda state: {}),
         "create_research_manager": noop,
         "create_trader": noop,
         "create_portfolio_manager": noop,
     }
     for target, stub in stubs.items():
         monkeypatch.setattr(graph_setup_module, target, stub)
+    # The analyst phase's clear/reset step now lives in parallel_analysts.py,
+    # not setup.py, since each analyst runs in its own subgraph (TODOS #21).
+    monkeypatch.setattr(parallel_analysts_module, "create_msg_delete", lambda: (lambda state: {}))
 
     workflow = graph_setup_module.GraphSetup(
         quick_thinking_llm="Q", deep_thinking_llm="D",

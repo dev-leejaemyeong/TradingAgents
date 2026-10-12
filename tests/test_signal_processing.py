@@ -116,6 +116,21 @@ class TestExtractRating:
         # substrings inside larger words must not match
         assert extract_rating("The buyer was holding shares.") is None
 
+    @pytest.mark.parametrize("prose", [
+        "We would not Sell here; the dip is a chance to add.",
+        "On balance we stay Underweight until margins recover.",
+        "The Research Manager rated this Overweight; the PM disagrees.",
+    ])
+    def test_a_rating_word_without_a_label_is_not_read_as_the_call(self, prose):
+        # Upstream #1435: a lone rating word in prose may be one the text
+        # argues against, or one it quotes from another party -- reading it
+        # anyway reports a direction nobody decided. extract_rating() has no
+        # label to go on so returns None; parse_rating() keeps its own
+        # silent-default contract (Hold) for that None, same as any other
+        # unparseable text.
+        assert extract_rating(prose) is None
+        assert parse_rating(prose) == "Hold"
+
     def test_parse_rating_keeps_silent_default_for_compat(self):
         # parse_rating (used by the memory log) intentionally keeps Hold default.
         assert parse_rating("No rating here.") == "Hold"

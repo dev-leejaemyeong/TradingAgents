@@ -8,7 +8,7 @@ from dateutil.relativedelta import relativedelta
 
 from .config import get_config
 from .stockstats_utils import yf_retry
-from .symbol_utils import normalize_symbol
+from .symbol_utils import NoMarketDataError, normalize_symbol
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -89,16 +89,17 @@ def get_news_yfinance(
     start_date: str,
     end_date: str,
 ) -> str:
-    """
-    Retrieve news for a specific stock ticker using yfinance.
+    """News about ``ticker`` published in the window, from Yahoo Finance.
 
-    Args:
-        ticker: Stock ticker symbol (e.g., "AAPL")
-        start_date: Start date in yyyy-mm-dd format
-        end_date: End date in yyyy-mm-dd format
-
-    Returns:
-        Formatted string containing news articles
+    The symbol's quote feed (``Ticker.get_news()``) comes first. When it is
+    empty -- which is also what it returns from the endpoint Yahoo withdrew
+    (404, silently empty) as of 2026-10-02 -- Yahoo search serves the articles
+    tagged with the symbol (the same mechanism get_global_news_yfinance()
+    uses). When search has no article tagged with the symbol, or neither
+    source answers, Yahoo news is unavailable -- not an absence of news --
+    and NoMarketDataError sends the call to the next configured vendor.
+    Search results are a relevance-picked sample, so finding none in the
+    requested window never reads as "no news" either.
     """
     article_limit = get_config()["news_article_limit"]
     # Query Yahoo with the canonical symbol, like every other yfinance path —
@@ -106,46 +107,60 @@ def get_news_yfinance(
     # returns no news. Keep the user's ticker in the report header.
     canonical = normalize_symbol(ticker)
     resolved = "" if canonical == ticker else f" (resolved to {canonical})"
-    try:
-        # Ticker.get_news() reads an endpoint Yahoo withdrew (404, silently
-        # empty) as of 2026-10-02; yf.Search(...).news still works (confirmed
-        # live 2026-10-12) and is the same mechanism get_global_news_yfinance()
-        # already uses below.
+
+    feed = yf_retry(lambda: yf.Ticker(canonical).get_news(count=article_limit)) or []
+    came_from_search = not feed
+    if came_from_search:
         search = yf_retry(lambda: yf.Search(canonical, news_count=article_limit))
-        news = search.news
+        tagged = [
+            a for a in (search.news or [])
+            if canonical in (t.upper() for t in a.get("relatedTickers") or [])
+        ]
+        knows_symbol = any(
+            (q.get("symbol") or "").upper() == canonical for q in (search.quotes or [])
+        )
+        if not (knows_symbol or search.news):
+            raise NoMarketDataError(ticker, canonical, "Yahoo Finance returned no news response")
+        if not tagged:
+            # With the quote feed empty, no article tagged with the symbol
+            # says nothing about the company's news (Yahoo tags no article
+            # with most non-US listings).
+            raise NoMarketDataError(ticker, canonical, "no news articles tagged with the symbol")
+        feed = tagged
 
-        if not news:
-            return f"No news found for {ticker}{resolved}"
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
-        # Parse date range for filtering
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    news_str = ""
+    filtered_count = 0
 
-        news_str = ""
-        filtered_count = 0
+    for article in feed:
+        data = _extract_article_data(article)
 
-        for article in news:
-            data = _extract_article_data(article)
+        # Keep only articles within the requested window (look-ahead safe).
+        if not _in_news_window(data["pub_date"], start_dt, end_dt):
+            continue
 
-            # Keep only articles within the requested window (look-ahead safe).
-            if not _in_news_window(data["pub_date"], start_dt, end_dt):
-                continue
+        news_str += f"### {data['title']} (source: {data['publisher']})\n"
+        if data["summary"]:
+            news_str += f"{data['summary']}\n"
+        if data["link"]:
+            news_str += f"Link: {data['link']}\n"
+        news_str += "\n"
+        filtered_count += 1
 
-            news_str += f"### {data['title']} (source: {data['publisher']})\n"
-            if data["summary"]:
-                news_str += f"{data['summary']}\n"
-            if data["link"]:
-                news_str += f"Link: {data['link']}\n"
-            news_str += "\n"
-            filtered_count += 1
+    if filtered_count == 0:
+        if came_from_search:
+            # Search is a relevance-picked sample of recent articles, not a
+            # full feed -- finding none in this window is not proof none exist.
+            return (
+                f"<Yahoo Finance news unavailable for {start_date}..{end_date}: Yahoo "
+                f"search returns only a sample of recent articles about {canonical}, "
+                f"so this is not an absence of news for {ticker}{resolved}>"
+            )
+        return f"No news found for {ticker}{resolved} between {start_date} and {end_date}"
 
-        if filtered_count == 0:
-            return f"No news found for {ticker}{resolved} between {start_date} and {end_date}"
-
-        return f"## {ticker}{resolved} News, from {start_date} to {end_date}:\n\n{news_str}"
-
-    except Exception as e:
-        return f"Error fetching news for {ticker}: {str(e)}"
+    return f"## {ticker}{resolved} News, from {start_date} to {end_date}:\n\n{news_str}"
 
 
 def get_global_news_yfinance(

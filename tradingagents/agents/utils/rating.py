@@ -36,19 +36,18 @@ _RATING_SET = {r.lower() for r in RATINGS_5_TIER}
 # bold wrappers and either a colon or hyphen separator.
 _RATING_LABEL_RE = re.compile(r"rating.*?[:\-][\s*]*(\w+)", re.IGNORECASE)
 
-# Standalone 5-tier word anywhere (word boundaries so "Buyer"/"Holding" don't match).
-_RATING_WORD_RE = re.compile(
-    r"\b(" + "|".join(RATINGS_5_TIER) + r")\b", re.IGNORECASE
-)
-
 
 def extract_rating(text: str) -> str | None:
-    """Extract a 5-tier rating from prose, or ``None`` if none is present.
+    """Extract a 5-tier rating from its label, or ``None`` if there is none.
 
-    Two-pass strategy on the NFKC-normalized text (so fullwidth punctuation like
-    ``Rating：Overweight`` is matched the same as ASCII):
-    1. An explicit "Rating: X" label (tolerant of markdown bold).
-    2. The first standalone 5-tier rating word found anywhere.
+    Reads an explicit "Rating: X" label (tolerant of markdown bold) in the
+    NFKC-normalized text, so fullwidth punctuation like ``Rating：Overweight``
+    matches as ASCII does.
+
+    Without a label there is no call to read: a rating word in the prose may
+    be one the text argues against ("not a Sell") or one it quotes from
+    another party, and reading it anyway reports a direction nobody decided
+    (upstream #1435).
     """
     if not text:
         return None
@@ -58,10 +57,6 @@ def extract_rating(text: str) -> str | None:
         m = _RATING_LABEL_RE.search(line)
         if m and m.group(1).lower() in _RATING_SET:
             return m.group(1).capitalize()
-
-    m = _RATING_WORD_RE.search(norm)
-    if m:
-        return m.group(1).capitalize()
 
     return None
 

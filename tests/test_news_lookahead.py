@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import pytest
 
 import tradingagents.dataflows.yfinance_news as ynews
+from tradingagents.dataflows.symbol_utils import NoMarketDataError
 
 
 def _epoch(date_str):
@@ -70,25 +71,102 @@ def test_offset_aware_timestamp_is_converted_not_truncated():
     assert ynews._in_news_window(aware, start, end) is True
 
 
-@pytest.mark.unit
-def test_per_ticker_news_uses_search_not_broken_get_news(monkeypatch):
-    # Ticker.get_news() reads an endpoint Yahoo withdrew (404, silently empty)
-    # as of 2026-10-02; get_news_yfinance() must go through yf.Search() instead
-    # (the same mechanism get_global_news_yfinance() already uses), and still
-    # apply the look-ahead-safe window filter.
-    future_article = {"title": "FUTURE EVENT", "publisher": "P", "link": "l",
-                      "providerPublishTime": _epoch("2025-06-01")}
-    past_article = {"title": "PAST EVENT", "publisher": "P", "link": "l",
-                    "providerPublishTime": _epoch("2025-05-05")}
+def _ticker_with(feed, monkeypatch, search_news=(), search_quotes=()):
+    """A quote feed answering ``feed``, and a search answering the rest.
+
+    Mirrors get_news_yfinance()'s own fallback order: Ticker.get_news()
+    first, yf.Search() only when that feed is empty (the quote-feed endpoint
+    Yahoo withdrew, 404, silently empty, as of 2026-10-02).
+    """
+    class FakeTicker:
+        def __init__(self, *a, **k):
+            pass
+
+        def get_news(self, count=20):
+            return feed
+
+    searched = []
 
     class FakeSearch:
-        def __init__(self, *a, **k):
-            self.news = [future_article, past_article]
+        def __init__(self, query, **k):
+            searched.append(query)
+            self.news = list(search_news)
+            self.quotes = [{"symbol": s} for s in search_quotes]
 
+    monkeypatch.setattr(ynews.yf, "Ticker", FakeTicker)
     monkeypatch.setattr(ynews.yf, "Search", FakeSearch)
+    monkeypatch.setattr(ynews, "yf_retry", lambda fn: fn())
+    return searched
+
+
+def _tagged(title, day, *tickers):
+    return {"title": title, "publisher": "P", "link": "l",
+            "providerPublishTime": _epoch(day), "relatedTickers": list(tickers)}
+
+
+@pytest.mark.unit
+def test_nonempty_ticker_feed_is_used_without_searching(monkeypatch):
+    searched = _ticker_with(
+        [{"title": "FEED", "publisher": "P", "link": "l", "providerPublishTime": _epoch("2025-05-05")}],
+        monkeypatch,
+    )
+    out = ynews.get_news_yfinance("AAPL", "2025-05-01", "2025-05-09")
+    assert "FEED" in out and searched == []
+
+
+@pytest.mark.unit
+def test_empty_feed_falls_back_to_articles_search_tags_with_the_symbol(monkeypatch):
+    searched = _ticker_with([], monkeypatch, search_news=[
+        _tagged("ABOUT AAPL", "2025-05-05", "AAPL", "MSFT"),
+        _tagged("ABOUT GIS", "2025-05-05", "GIS"),
+    ])
+    out = ynews.get_news_yfinance("AAPL", "2025-05-01", "2025-05-09")
+    assert searched == ["AAPL"]
+    assert "ABOUT AAPL" in out and "ABOUT GIS" not in out
+
+
+@pytest.mark.unit
+def test_search_fallback_still_applies_look_ahead_window_filter(monkeypatch):
+    # Ticker.get_news() reads an endpoint Yahoo withdrew (404, silently empty)
+    # as of 2026-10-02; the yf.Search() fallback must still apply the same
+    # look-ahead-safe window filter as the quote feed does.
+    _ticker_with([], monkeypatch, search_news=[
+        _tagged("FUTURE EVENT", "2025-06-01", "AAPL"),
+        _tagged("PAST EVENT", "2025-05-05", "AAPL"),
+    ])
     out = ynews.get_news_yfinance("AAPL", "2025-05-01", "2025-05-09")
     assert "PAST EVENT" in out
     assert "FUTURE EVENT" not in out
+
+
+@pytest.mark.unit
+def test_no_tagged_search_results_raises_no_market_data(monkeypatch):
+    # With the quote feed empty, Yahoo knowing the symbol but tagging no
+    # article with it says nothing about the company's news -> the router
+    # must be able to move on to the next configured vendor.
+    _ticker_with([], monkeypatch, search_news=[_tagged("UNRELATED", "2025-05-05", "GIS")],
+                 search_quotes=["AAPL"])
+    with pytest.raises(NoMarketDataError):
+        ynews.get_news_yfinance("AAPL", "2025-05-01", "2025-05-09")
+
+
+@pytest.mark.unit
+def test_neither_source_answers_raises_no_market_data(monkeypatch):
+    _ticker_with([], monkeypatch, search_news=[], search_quotes=[])
+    with pytest.raises(NoMarketDataError):
+        ynews.get_news_yfinance("AAPL", "2025-05-01", "2025-05-09")
+
+
+@pytest.mark.unit
+def test_tagged_results_outside_window_is_not_an_absence_message(monkeypatch):
+    # Search is a relevance-picked sample, not a full feed: finding nothing in
+    # the requested window is not proof no news exists, so this must not read
+    # as "No news found".
+    _ticker_with([], monkeypatch, search_news=[_tagged("OLD", "2025-01-05", "AAPL")],
+                 search_quotes=["AAPL"])
+    out = ynews.get_news_yfinance("AAPL", "2025-05-01", "2025-05-09")
+    assert "No news found" not in out
+    assert "unavailable" in out and "not an absence" in out
 
 
 @pytest.mark.unit

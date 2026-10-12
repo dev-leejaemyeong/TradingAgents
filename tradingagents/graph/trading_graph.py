@@ -408,12 +408,21 @@ class TradingAgentsGraph:
         Keyed into the checkpoint thread ID so a resume under a different analyst
         selection, debate/risk depth, or asset mode starts fresh instead of
         silently continuing the previous graph (#1089).
+
+        ``graph_version`` bumps whenever the node topology inside
+        ``GraphSetup.setup_graph()`` changes shape, even with the same
+        analysts/depth/asset inputs -- the chained per-analyst nodes
+        ("Market Analyst", "Msg Clear Market", ...) collapsed into one
+        "Analyst Team" node (TODOS #21, 2026-10-12); a checkpoint saved
+        mid-run under the old node names would otherwise look "compatible"
+        by this signature and fail to resume against the new graph.
         """
         return "|".join([
             "analysts=" + ",".join(self.selected_analysts),
             f"debate={self.config['max_debate_rounds']}",
             f"risk={self.config['max_risk_discuss_rounds']}",
             f"asset={asset_type}",
+            "graph_version=2",
         ])
 
     def propagate(
