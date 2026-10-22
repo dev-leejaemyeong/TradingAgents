@@ -92,6 +92,10 @@ class AgentState(MessagesState):
     # 2026-09-22: the forced-exit horizon. Of 16 debates where the PM stated
     # a holding period, 15 were longer than the cap it was never told about.
     max_hold_days: Annotated[int | None, "Calendar days after which the position is force-closed"]
+    # 2026-10-23 (TODOS #166-3/A9): held_review only -- days left until the
+    # position's current forced-exit date and until the longest date it may be
+    # extended to, so hold_days can mean "days from today" there.
+    held_horizon: Annotated[dict | None, "held_review: {'current_remaining_days': int, 'max_remaining_days': int}"]
 
     # 2026-09-04: single source of truth for the PM prompt's "typically
     # within roughly Nx-Mx the baseline" sizing guidance, previously a

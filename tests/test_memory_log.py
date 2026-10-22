@@ -735,6 +735,43 @@ class TestPortfolioManagerInjection:
         assert "typically within roughly 0.3x-3x the baseline" in captured["prompt"]
         assert "0.5x-2x" not in captured["prompt"]
 
+    # held_horizon (2026-10-23, TODOS #166-3/A9) -- a held-position review
+    # counts hold_days from today and may lengthen, unlike the entry wording.
+
+    def test_pm_held_review_horizon_counts_from_today_and_allows_extension(self):
+        captured = {}
+        pm_node = create_portfolio_manager(_structured_pm_llm(captured))
+        state = _make_pm_state()
+        state["max_hold_days"] = 180
+        state["evaluation_mode"] = "held_review"
+        state["held_horizon"] = {"current_remaining_days": 59, "max_remaining_days": 150}
+        pm_node(state)
+        assert "force-closed in 59 calendar days" in captured["prompt"]
+        assert "at most 150 more calendar days from today" in captured["prompt"]
+        assert "FROM TODAY" in captured["prompt"]
+        # the entry wording must not also be present
+        assert "cannot extend" not in captured["prompt"]
+
+    def test_pm_entry_horizon_unchanged_when_no_held_horizon(self):
+        captured = {}
+        pm_node = create_portfolio_manager(_structured_pm_llm(captured))
+        state = _make_pm_state()
+        state["max_hold_days"] = 180
+        state["evaluation_mode"] = "held_review"  # held_horizon absent
+        pm_node(state)
+        assert "force-closed 180 calendar days after entry" in captured["prompt"]
+        assert "FROM TODAY" not in captured["prompt"]
+
+    def test_pm_new_entry_ignores_held_horizon(self):
+        captured = {}
+        pm_node = create_portfolio_manager(_structured_pm_llm(captured))
+        state = _make_pm_state()
+        state["max_hold_days"] = 180
+        state["evaluation_mode"] = "new_entry"
+        state["held_horizon"] = {"current_remaining_days": 59, "max_remaining_days": 150}
+        pm_node(state)
+        assert "force-closed 180 calendar days after entry" in captured["prompt"]
+
     def test_pm_returns_rendered_markdown_with_rating(self):
         """The structured PortfolioDecision is rendered to markdown that
         downstream consumers (memory log, signal processor, CLI display)

@@ -28,6 +28,7 @@ class Propagator:
         pm_size_range_low: float | None = None,
         pm_size_range_high: float | None = None,
         evaluation_mode: str | None = None,
+        held_horizon: dict | None = None,
     ) -> dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -57,6 +58,11 @@ class Propagator:
         yet, ``"held_review"`` when re-underwriting an open position. Selects
         the rating-scale wording in the Research Manager and Portfolio Manager
         prompts; ``None`` keeps the original, position-management wording.
+
+        ``held_horizon`` (2026-10-23, TODOS #166-3/A9): only with
+        ``"held_review"`` -- ``{"current_remaining_days", "max_remaining_days"}``,
+        so the PM's ``hold_days`` is read as days from today (see
+        portfolio_manager.py). ``None`` keeps the entry-time wording.
         """
         return {
             "messages": [("human", company_name)],
@@ -71,6 +77,7 @@ class Propagator:
             "pm_size_range_low": pm_size_range_low,
             "pm_size_range_high": pm_size_range_high,
             "evaluation_mode": evaluation_mode,
+            "held_horizon": held_horizon,
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",

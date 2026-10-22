@@ -439,6 +439,7 @@ class TradingAgentsGraph:
         evaluation_mode: str | None = None,
         observation_only: bool = False,
         past_context_override: str | None = None,
+        held_horizon: dict | None = None,
     ):
         """Run the trading agents graph for a company on a specific date.
 
@@ -465,6 +466,10 @@ class TradingAgentsGraph:
         ``max_hold_days`` (2026-09-22): forwarded to the initial state so the
         Portfolio Manager is told the forced-exit horizon it has to work
         inside -- see portfolio_manager.py. None keeps the prompt unchanged.
+
+        ``held_horizon`` (2026-10-23, TODOS #166-3/A9): held_review only --
+        ``{"current_remaining_days", "max_remaining_days"}`` so the PM's
+        ``hold_days`` means days from today; see portfolio_manager.py.
 
         ``evaluation_mode`` (2026-09-16): "new_entry" when nothing is held
         yet, "held_review" when re-underwriting an open position -- selects
@@ -543,6 +548,7 @@ class TradingAgentsGraph:
                 evaluation_mode=evaluation_mode,
                 observation_only=observation_only,
                 past_context_override=past_context_override,
+                held_horizon=held_horizon,
             )
         finally:
             if self._checkpointer_ctx is not None:
@@ -579,6 +585,7 @@ class TradingAgentsGraph:
         evaluation_mode: str | None = None,
         observation_only: bool = False,
         past_context_override: str | None = None,
+        held_horizon: dict | None = None,
     ):
         """Execute the graph and write the resulting state to disk and memory log."""
         # Initialize state — inject memory log context for PM and the
@@ -607,6 +614,7 @@ class TradingAgentsGraph:
             pm_size_range_low=pm_size_range_low,
             pm_size_range_high=pm_size_range_high,
             evaluation_mode=evaluation_mode,
+            held_horizon=held_horizon,
         )
         args = self.propagator.get_graph_args(callbacks=self.callbacks)
 

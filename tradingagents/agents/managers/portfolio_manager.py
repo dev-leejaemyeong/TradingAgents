@@ -129,6 +129,24 @@ def create_portfolio_manager(llm):
             if max_hold_days
             else ""
         )
+        held_horizon = state.get("held_horizon")
+        if state.get("evaluation_mode") == "held_review" and held_horizon:
+            # 2026-10-23 (TODOS #166-3/A9): a review of a position already held.
+            # hold_days here counts from TODAY and may lengthen the position up
+            # to the cap -- the entry wording above ("shorter only, else leave
+            # blank") made a PM that followed it return nothing, so an
+            # extension could never happen, and a PM that read it as "from
+            # entry" could name a date already in the past.
+            horizon_line = (
+                f"- Holding horizon: this position is currently scheduled to be "
+                f"force-closed in {held_horizon['current_remaining_days']} calendar days. "
+                f"It may be kept for at most {held_horizon['max_remaining_days']} more "
+                f"calendar days from today. Set hold_days to the number of calendar days "
+                f"FROM TODAY you want to keep holding (1 to "
+                f"{held_horizon['max_remaining_days']}); a larger number is clamped down. "
+                f"Leave it unset to keep the current schedule. To exit now, rate it "
+                f"Sell instead -- hold_days is not an exit signal.\n"
+            )
         sizing_context_line = ""
         if total_capital_usd and max_positions:
             baseline_usd = total_capital_usd / max_positions

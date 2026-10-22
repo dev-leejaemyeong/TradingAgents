@@ -285,7 +285,10 @@ class PortfolioDecision(BaseModel):
             "regardless of this value (stated above, when a cap is in force) "
             "-- a number longer than that cap is silently clamped down to it, "
             "so only set this to signal a SHORTER horizon than the cap. Leave "
-            "unset if the full cap fits your conviction."
+            "unset if the full cap fits your conviction. EXCEPTION: when the "
+            "Holding horizon line in the context says the position is already "
+            "held and days count FROM TODAY, follow that line instead -- there "
+            "a longer number is allowed, up to the maximum it states."
         ),
     )
     stop_loss: float | None = Field(
