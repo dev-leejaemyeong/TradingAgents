@@ -315,7 +315,10 @@ class PortfolioDecision(BaseModel):
         description=(
             "The final dollar amount to allocate to this position, no greater "
             "than the available buying-power figure stated in the prompt "
-            "context, if one was given."
+            "context, if one was given. EXCEPTION: when the context says the "
+            "position is already held and this is an add-on decision, it is "
+            "only the dollar amount to ADD now (0 or unset adds nothing), not "
+            "the position's total size."
         ),
     )
     rejection_category: (

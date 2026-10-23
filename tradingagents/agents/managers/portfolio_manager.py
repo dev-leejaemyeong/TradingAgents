@@ -163,6 +163,24 @@ def create_portfolio_manager(llm):
                 f"left to spend.)\n"
             )
 
+        if state.get("evaluation_mode") == "held_review" and total_capital_usd and max_positions:
+            # 2026-10-23 (TODOS #164/A10a): the entry sizing wording above
+            # ("Equal-weight baseline for an average-conviction Buy ... size
+            # larger for stronger conviction") reads as an opening size; on a
+            # held-position review position_size_usd is only the amount ADDED
+            # now, and nothing is added unless the rating is Buy/Overweight.
+            sizing_context_line = (
+                f"- Add-on sizing: this position is already held. position_size_usd here "
+                f"means the dollar amount to ADD to it now, not its total size. Rate it "
+                f"Buy or Overweight and set a positive position_size_usd only if you want "
+                f"to add; otherwise leave it 0 or unset -- Hold, Underweight and Sell "
+                f"never add. An add-on happens at most once per position and is skipped "
+                f"when the position context says it is unavailable. Equal-weight baseline "
+                f"per position: ${total_capital_usd / max_positions:,.2f} (a reference, "
+                f"not a target; a downstream system separately caps the position's total "
+                f"and the cash actually left).\n"
+            )
+
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
 {instrument_context}

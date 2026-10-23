@@ -772,6 +772,40 @@ class TestPortfolioManagerInjection:
         pm_node(state)
         assert "force-closed 180 calendar days after entry" in captured["prompt"]
 
+    # held_review sizing wording (2026-10-23, TODOS #164/A10a) -- on a review
+    # position_size_usd is only the amount ADDED now.
+
+    def test_pm_held_review_sizing_line_says_amount_to_add(self):
+        captured = {}
+        pm_node = create_portfolio_manager(_structured_pm_llm(captured))
+        state = _make_pm_state()
+        state["total_capital_usd"] = 1000.0
+        state["max_positions"] = 8
+        state["evaluation_mode"] = "held_review"
+        pm_node(state)
+        assert "dollar amount to ADD" in captured["prompt"]
+        assert "Equal-weight baseline per position: $125.00" in captured["prompt"]
+        assert "average-conviction Buy" not in captured["prompt"]
+
+    def test_pm_held_review_without_capital_has_no_sizing_line(self):
+        captured = {}
+        pm_node = create_portfolio_manager(_structured_pm_llm(captured))
+        state = _make_pm_state()
+        state["evaluation_mode"] = "held_review"
+        pm_node(state)
+        assert "Add-on sizing" not in captured["prompt"]
+
+    def test_pm_new_entry_sizing_line_unchanged(self):
+        captured = {}
+        pm_node = create_portfolio_manager(_structured_pm_llm(captured))
+        state = _make_pm_state()
+        state["total_capital_usd"] = 1000.0
+        state["max_positions"] = 8
+        state["evaluation_mode"] = "new_entry"
+        pm_node(state)
+        assert "average-conviction Buy: $125.00" in captured["prompt"]
+        assert "dollar amount to ADD" not in captured["prompt"]
+
     def test_pm_returns_rendered_markdown_with_rating(self):
         """The structured PortfolioDecision is rendered to markdown that
         downstream consumers (memory log, signal processor, CLI display)
