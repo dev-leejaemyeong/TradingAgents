@@ -77,6 +77,17 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # the oldest resolved entries are pruned once this limit is exceeded.
     # Pending entries are never pruned. None disables rotation entirely.
     "memory_log_max_entries": None,
+    # Calendar days after a decision before its outcome is judged against the
+    # market (TODOS #168/M1a, 2026-10-23). Was a hardcoded 5-trading-day window
+    # no caller overrode; 180 matches the position max-hold (TODOS #166), so a
+    # rejected/never-bought decision is checked over the horizon it would have
+    # been held. Entries younger than this are skipped without any price call.
+    "memory_log_holding_days": 180,
+    # Lessons shown to the Portfolio Manager (TODOS #168/M2): this ticker's most
+    # recent N in full, plus the best BM25 matches on the analyst reports
+    # (matched in the PM node, see TradingMemoryLog.get_similar_lessons).
+    "memory_log_same_ticker_lessons": 2,
+    "memory_log_similar_lessons": 2,
     # LLM settings
     "llm_provider": "openai",
     "deep_think_llm": "gpt-5.5",

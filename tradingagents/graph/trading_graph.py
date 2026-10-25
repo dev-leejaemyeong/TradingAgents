@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +27,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_verified_market_snapshot,
     resolve_instrument_identity,
 )
-from tradingagents.agents.utils.memory import TradingMemoryLog
+from tradingagents.agents.utils.memory import REVIEW_POINTER_PREFIX, TradingMemoryLog
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -60,6 +60,12 @@ def _coerce_max_retries(value):
     if n < 0:
         raise ValueError(f"llm_max_retries must be >= 0, got {n}")
     return n
+
+
+
+def _today() -> date:
+    """Today's date; a module-level function so tests can pin it."""
+    return datetime.now().date()
 
 
 class TradingAgentsGraph:
@@ -131,6 +137,8 @@ class TradingAgentsGraph:
             self.tool_nodes,
             self.conditional_logic,
             node_llms=self.node_llms,
+            memory_log=self.memory_log,
+            similar_lessons=int(self.config.get("memory_log_similar_lessons", 2)),
         )
 
         self.propagator = Propagator(
@@ -350,6 +358,115 @@ class TradingAgentsGraph:
             )
             return None, None, None
 
+    def _fetch_benchmark_return(
+        self, benchmark: str, start: str, end: str
+    ) -> float | None:
+        """Benchmark's close-to-close return from the first session on/after
+        ``start`` to the last session on/before ``end`` (both ISO dates), or
+        None when the data is unavailable. One price call, no retry -- the
+        caller treats None as "try again on a later run"."""
+        try:
+            first = datetime.strptime(start, "%Y-%m-%d")
+            last = datetime.strptime(end, "%Y-%m-%d")
+            hist = yf.Ticker(benchmark).history(
+                start=first.strftime("%Y-%m-%d"),
+                end=(last + timedelta(days=1)).strftime("%Y-%m-%d"),
+            )
+            if len(hist) < 2:
+                return None
+            return float(hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1)
+        except Exception as e:
+            logger.warning(
+                "Could not fetch %s return %s..%s (will retry next run): %s", benchmark, start, end, e
+            )
+            return None
+
+    def resolve_closed_position(
+        self,
+        ticker: str,
+        decision_dates: list[str],
+        entry_date: str,
+        exit_date: str,
+        realized_return: float,
+    ) -> int:
+        """Resolve a closed trade's pending log entries with its REALIZED
+        outcome (TODOS #168/M1b, 2026-10-23) instead of waiting for a price
+        window to elapse on the next same-ticker analysis.
+
+        ``decision_dates``: the log dates of this holding episode's decisions
+        (the entry decision and any recorded reviews); only pending entries of
+        ``ticker`` on those dates are touched. ``realized_return`` is the whole
+        position's net return (group P&L / cost, fractions), ``entry_date``/
+        ``exit_date`` its first entry and last exit. At most ONE LLM call per
+        invocation: the earliest decision (the entry) gets a real reflection;
+        every other pending entry of the episode is resolved with the same
+        outcome and a pointer to it, so one trade is not taught repeatedly.
+        Alpha is measured against the ticker's benchmark over the actual
+        holding dates. Returns how many entries were resolved; 0 leaves
+        everything pending (nothing pending, or the benchmark return was
+        unavailable -- no LLM call is made then, and there is no inner retry).
+        """
+        dates = set(decision_dates)
+        pending = sorted(
+            (e for e in self.memory_log.get_pending_entries()
+             if e["ticker"] == ticker and e["date"] in dates),
+            key=lambda e: e["date"],
+        )
+        if not pending:
+            return 0
+        benchmark = self._resolve_benchmark(ticker)
+        bench_return = self._fetch_benchmark_return(benchmark, entry_date, exit_date)
+        if bench_return is None:
+            return 0
+        alpha = realized_return - bench_return
+        held_days = (
+            datetime.strptime(exit_date, "%Y-%m-%d") - datetime.strptime(entry_date, "%Y-%m-%d")
+        ).days
+        first = pending[0]
+        reflection = self.reflector.reflect_on_final_decision(
+            final_decision=first.get("decision", ""),
+            raw_return=realized_return,
+            alpha_return=alpha,
+            benchmark_name=benchmark,
+        )
+        updates = [{
+            "ticker": ticker,
+            "trade_date": first["date"],
+            "raw_return": realized_return,
+            "alpha_return": alpha,
+            "holding_days": held_days,
+            "reflection": reflection,
+        }]
+        for entry in pending[1:]:
+            updates.append({
+                "ticker": ticker,
+                "trade_date": entry["date"],
+                "raw_return": realized_return,
+                "alpha_return": alpha,
+                "holding_days": held_days,
+                "reflection": (
+                    f"{REVIEW_POINTER_PREFIX} (entered {entry_date}, "
+                    f"closed {exit_date}); the realized outcome is in the tag. The lesson "
+                    f"is recorded on the entry decision of {first['date']}."
+                ),
+            })
+        self.memory_log.batch_update_with_outcomes(updates)
+        return len(updates)
+
+    def _record_decision(
+        self, company_name, trade_date, final_trade_decision, evaluation_mode
+    ) -> None:
+        """Log this run's decision for deferred reflection. A held-position
+        review (``evaluation_mode == "held_review"``) is recorded only when its
+        rating differs from the ticker's previous entry; a new-entry decision
+        is always recorded (TODOS #168/M1a)."""
+        self.memory_log.store_decision(
+            ticker=company_name,
+            trade_date=trade_date,
+            final_trade_decision=final_trade_decision,
+            only_if_rating_changed=(evaluation_mode == "held_review"),
+        )
+
     def _resolve_pending_entries(self, ticker: str) -> None:
         """Resolve pending log entries for ticker at the start of a new run.
 
@@ -364,11 +481,24 @@ class TradingAgentsGraph:
         if not pending:
             return
 
+        # TODOS #168/M1a: judge over ``memory_log_holding_days`` (180) instead of
+        # the old hardcoded 5, and never touch Yahoo for an entry that has not
+        # lived that long -- a rejected candidate that is re-debated every few
+        # days used to trigger two price downloads each time just to be told
+        # "too recent".
+        holding_days = int(self.config.get("memory_log_holding_days", 180))
+        today = _today()
         benchmark = self._resolve_benchmark(ticker)
         updates = []
         for entry in pending:
+            try:
+                entry_date = datetime.strptime(entry["date"], "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                continue  # cannot age it -- leave it pending rather than guess
+            if (today - entry_date).days < holding_days:
+                continue
             raw, alpha, days = self._fetch_returns(
-                ticker, entry["date"], benchmark=benchmark,
+                ticker, entry["date"], holding_days=holding_days, benchmark=benchmark,
             )
             if raw is None:
                 continue  # price not available yet — try again next run
@@ -598,7 +728,15 @@ class TradingAgentsGraph:
             # folded into the override.
             past_context = past_context_override
         else:
-            past_context = self.memory_log.get_past_context(company_name)
+            # TODOS #168/M2: 8 lessons (5 same-ticker + 3 cross-ticker, all by
+            # recency) -> this ticker's most recent few in full here; the
+            # similarity-matched ones are added inside the PM node, where the
+            # run's own analyst reports (the query) exist.
+            past_context = self.memory_log.get_past_context(
+                company_name,
+                n_same=int(self.config.get("memory_log_same_ticker_lessons", 2)),
+                n_cross=0,
+            )
             if extra_context:
                 past_context = f"{extra_context}\n\n{past_context}" if past_context else extra_context
         instrument_context = self.resolve_instrument_context(company_name, asset_type)
@@ -654,10 +792,8 @@ class TradingAgentsGraph:
             self._log_state(trade_date, final_state)
 
             # Store decision for deferred reflection on the next same-ticker run.
-            self.memory_log.store_decision(
-                ticker=company_name,
-                trade_date=trade_date,
-                final_trade_decision=final_state["final_trade_decision"],
+            self._record_decision(
+                company_name, trade_date, final_state["final_trade_decision"], evaluation_mode
             )
 
         # Clear checkpoint on successful completion to avoid stale state.

@@ -655,6 +655,7 @@ class TestDeferredReflection:
         mock_graph = MagicMock(spec=TradingAgentsGraph)
         mock_graph.memory_log = log
         mock_graph.reflector = mock_reflector
+        mock_graph.config = {}  # instance attribute -- not on the class, so spec=... hides it
         mock_graph._fetch_returns = MagicMock(return_value=(0.05, 0.02, 5))
         TradingAgentsGraph._resolve_pending_entries(mock_graph, "NVDA")
         assert log.get_pending_entries() == []
@@ -664,6 +665,173 @@ class TestDeferredReflection:
         assert entries[0]["reflection"] == "Momentum confirmed."
         assert "+5.0%" in entries[0]["raw"]
         assert "+2.0%" in entries[0]["alpha"]
+
+
+# ---------------------------------------------------------------------------
+# TODOS #168/M1a: rating-change-only logging, 180-day window, no price call
+# for an entry that has not lived that long
+# ---------------------------------------------------------------------------
+
+DECISION_HOLD = "Rating: Hold\nHold NVDA."
+
+
+class TestStoreOnlyIfRatingChanged:
+
+    def test_default_still_records_every_decision(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-10", DECISION_BUY)
+        log.store_decision("NVDA", "2026-01-20", DECISION_BUY)
+        assert len(log.load_entries()) == 2
+
+    def test_same_rating_as_previous_entry_is_skipped(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-10", DECISION_HOLD)
+        log.store_decision("NVDA", "2026-02-10", DECISION_HOLD, only_if_rating_changed=True)
+        log.store_decision("NVDA", "2026-03-10", DECISION_HOLD, only_if_rating_changed=True)
+        assert [e["date"] for e in log.load_entries()] == ["2026-01-10"]
+
+    def test_changed_rating_is_recorded_and_becomes_the_new_baseline(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-10", DECISION_HOLD)
+        log.store_decision("NVDA", "2026-02-10", DECISION_SELL, only_if_rating_changed=True)
+        log.store_decision("NVDA", "2026-03-10", DECISION_SELL, only_if_rating_changed=True)
+        assert [(e["date"], e["rating"]) for e in log.load_entries()] == [
+            ("2026-01-10", "Hold"), ("2026-02-10", "Sell")]
+
+    def test_first_entry_for_a_ticker_is_always_recorded(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("AAPL", "2026-01-10", DECISION_HOLD)
+        log.store_decision("NVDA", "2026-02-10", DECISION_HOLD, only_if_rating_changed=True)
+        assert len(log.load_entries()) == 2
+
+    def test_a_resolved_previous_entry_still_counts_as_the_baseline(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-10", DECISION_HOLD)
+        log.update_with_outcome("NVDA", "2026-01-10", 0.05, 0.02, 120, "ok")
+        log.store_decision("NVDA", "2026-08-10", DECISION_HOLD, only_if_rating_changed=True)
+        assert len(log.load_entries()) == 1
+
+    def test_other_tickers_do_not_affect_the_comparison(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-10", DECISION_HOLD)
+        log.store_decision("AAPL", "2026-01-11", DECISION_BUY)
+        log.store_decision("NVDA", "2026-02-10", DECISION_HOLD, only_if_rating_changed=True)
+        assert [e["ticker"] for e in log.load_entries()] == ["NVDA", "AAPL"]
+
+    def test_unparseable_rating_compares_like_any_other_value(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-10", DECISION_NO_RATING)
+        log.store_decision("NVDA", "2026-02-10", DECISION_NO_RATING, only_if_rating_changed=True)
+        assert len(log.load_entries()) == 1
+
+
+class TestRecordDecisionByMode:
+    """The held-review caller opts into the filter; a new-entry decision never does."""
+
+    def _graph(self, log):
+        g = MagicMock(spec=TradingAgentsGraph)
+        g.memory_log = log
+        return g
+
+    def test_held_review_repeating_a_rating_is_not_recorded(self, tmp_path):
+        log = make_log(tmp_path)
+        g = self._graph(log)
+        TradingAgentsGraph._record_decision(g, "NVDA", "2026-01-10", DECISION_HOLD, "held_review")
+        TradingAgentsGraph._record_decision(g, "NVDA", "2026-02-10", DECISION_HOLD, "held_review")
+        assert len(log.load_entries()) == 1
+
+    def test_new_entry_after_an_exit_is_recorded_even_with_the_same_rating(self, tmp_path):
+        log = make_log(tmp_path)
+        g = self._graph(log)
+        TradingAgentsGraph._record_decision(g, "NVDA", "2026-01-10", DECISION_BUY, "new_entry")
+        TradingAgentsGraph._record_decision(g, "NVDA", "2026-09-10", DECISION_BUY, "new_entry")
+        assert len(log.load_entries()) == 2
+
+    def test_no_mode_behaves_like_new_entry(self, tmp_path):
+        log = make_log(tmp_path)
+        g = self._graph(log)
+        TradingAgentsGraph._record_decision(g, "NVDA", "2026-01-10", DECISION_HOLD, None)
+        TradingAgentsGraph._record_decision(g, "NVDA", "2026-02-10", DECISION_HOLD, None)
+        assert len(log.load_entries()) == 2
+
+
+class TestResolveHoldingWindow:
+
+    def _graph(self, log, config=None):
+        g = MagicMock(spec=TradingAgentsGraph)
+        g.memory_log = log
+        g.config = {} if config is None else config
+        g.reflector = MagicMock()
+        g.reflector.reflect_on_final_decision.return_value = "lesson"
+        g._fetch_returns = MagicMock(return_value=(0.05, 0.02, 120))
+        g._resolve_benchmark = MagicMock(return_value="SPY")
+        return g
+
+    def _run(self, g, today):
+        with patch("tradingagents.graph.trading_graph._today", return_value=today):
+            TradingAgentsGraph._resolve_pending_entries(g, "NVDA")
+
+    def test_entry_younger_than_the_window_makes_no_price_call(self, tmp_path):
+        from datetime import date
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-10", DECISION_BUY)
+        g = self._graph(log)
+        self._run(g, date(2026, 7, 8))  # 179 days later
+        g._fetch_returns.assert_not_called()
+        g.reflector.reflect_on_final_decision.assert_not_called()
+        assert len(log.get_pending_entries()) == 1
+
+    def test_entry_at_the_window_is_judged_over_180_days(self, tmp_path):
+        from datetime import date
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-10", DECISION_BUY)
+        g = self._graph(log)
+        self._run(g, date(2026, 7, 9))  # exactly 180 days later
+        g._fetch_returns.assert_called_once()
+        assert g._fetch_returns.call_args.kwargs["holding_days"] == 180
+        assert log.get_pending_entries() == []
+
+    def test_window_is_configurable(self, tmp_path):
+        from datetime import date
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-10", DECISION_BUY)
+        g = self._graph(log, {"memory_log_holding_days": 30})
+        self._run(g, date(2026, 2, 8))  # 29 days
+        g._fetch_returns.assert_not_called()
+        self._run(g, date(2026, 2, 9))  # 30 days
+        assert g._fetch_returns.call_args.kwargs["holding_days"] == 30
+
+    def test_only_old_enough_entries_are_fetched_when_mixed(self, tmp_path):
+        from datetime import date
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-10", DECISION_BUY)
+        log.store_decision("NVDA", "2026-06-01", DECISION_SELL)
+        g = self._graph(log)
+        self._run(g, date(2026, 8, 1))
+        assert [c.args[1] for c in g._fetch_returns.call_args_list] == ["2026-01-10"]
+        assert [e["date"] for e in log.get_pending_entries()] == ["2026-06-01"]
+
+    def test_unparseable_entry_date_is_left_pending_without_a_price_call(self, tmp_path):
+        from datetime import date
+        log = make_log(tmp_path)
+        log._log_path.write_text(
+            "[not-a-date | NVDA | Buy | pending]\n\nDECISION:\nRating: Buy\n" + log._SEPARATOR,
+            encoding="utf-8",
+        )
+        g = self._graph(log)
+        self._run(g, date(2026, 8, 1))
+        g._fetch_returns.assert_not_called()
+        assert len(log.get_pending_entries()) == 1
+
+    def test_unresolvable_price_keeps_the_entry_pending(self, tmp_path):
+        from datetime import date
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-10", DECISION_BUY)
+        g = self._graph(log)
+        g._fetch_returns = MagicMock(return_value=(None, None, None))
+        self._run(g, date(2026, 9, 1))
+        assert len(log.get_pending_entries()) == 1
+        g.reflector.reflect_on_final_decision.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1100,6 +1268,10 @@ class TestLegacyRemoval:
         mock_graph._run_graph = functools.partial(
             TradingAgentsGraph._run_graph, mock_graph
         )
+        # _run_graph logs the decision through _record_decision (TODOS #168/M1a)
+        mock_graph._record_decision = functools.partial(
+            TradingAgentsGraph._record_decision, mock_graph
+        )
         TradingAgentsGraph.propagate(mock_graph, "NVDA", "2026-01-10")
         entries = mock_graph.memory_log.load_entries()
         assert len(entries) == 1
@@ -1140,6 +1312,7 @@ class TestLegacyRemoval:
         mock_graph.propagator.get_graph_args.return_value = {}
         mock_graph.signal_processor.process_signal.return_value = "Hold"
         mock_graph._run_graph = functools.partial(TradingAgentsGraph._run_graph, mock_graph)
+        mock_graph._record_decision = functools.partial(TradingAgentsGraph._record_decision, mock_graph)
         TradingAgentsGraph.propagate(mock_graph, "NVDA", "2026-01-10", extra_context=extra_context)
         return mock_graph.propagator.create_initial_state.call_args.kwargs
 
@@ -1161,3 +1334,298 @@ class TestLegacyRemoval:
         )
         assert kwargs["past_context"].startswith("Rejection cache trigger info.")
         assert "Great call." in kwargs["past_context"]
+
+
+class TestResolveClosedPosition:
+    """TODOS #168/M1b: a closed trade's pending entries resolved with the
+    REALIZED outcome, one LLM call per trade."""
+
+    def _graph(self, log, bench_return=0.04):
+        g = MagicMock(spec=TradingAgentsGraph)
+        g.memory_log = log
+        g.reflector = MagicMock()
+        g.reflector.reflect_on_final_decision.return_value = "The entry thesis held."
+        g._resolve_benchmark = MagicMock(return_value="SPY")
+        g._fetch_benchmark_return = MagicMock(return_value=bench_return)
+        return g
+
+    def _call(self, g, dates, ret=0.10):
+        return TradingAgentsGraph.resolve_closed_position(
+            g, "NVDA", dates, "2026-01-05", "2026-03-06", ret
+        )
+
+    def test_entry_gets_the_reflection_and_reviews_get_a_pointer_with_one_llm_call(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        log.store_decision("NVDA", "2026-02-05", DECISION_SELL)
+        g = self._graph(log)
+        assert self._call(g, ["2026-01-05", "2026-02-05"]) == 2
+        g.reflector.reflect_on_final_decision.assert_called_once()
+        kwargs = g.reflector.reflect_on_final_decision.call_args.kwargs
+        assert kwargs["raw_return"] == pytest.approx(0.10)
+        assert kwargs["alpha_return"] == pytest.approx(0.06)
+        assert "Rating: Buy" in kwargs["final_decision"]  # the ENTRY decision, not the later review
+        assert log.get_pending_entries() == []
+        entries = {e["date"]: e for e in log.load_entries()}
+        assert entries["2026-01-05"]["reflection"] == "The entry thesis held."
+        assert "recorded on the entry decision of 2026-01-05" in entries["2026-02-05"]["reflection"]
+        for e in entries.values():
+            assert "+10.0%" in e["raw"] and "+6.0%" in e["alpha"] and e["holding"] == "60d"
+
+    def test_benchmark_is_measured_over_the_holding_dates(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        g = self._graph(log)
+        self._call(g, ["2026-01-05"])
+        g._fetch_benchmark_return.assert_called_once_with("SPY", "2026-01-05", "2026-03-06")
+
+    def test_unavailable_benchmark_makes_no_llm_call_and_leaves_everything_pending(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        g = self._graph(log, bench_return=None)
+        assert self._call(g, ["2026-01-05"]) == 0
+        g.reflector.reflect_on_final_decision.assert_not_called()
+        assert len(log.get_pending_entries()) == 1
+
+    def test_failing_llm_leaves_entries_pending_and_does_not_retry(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        g = self._graph(log)
+        g.reflector.reflect_on_final_decision.side_effect = RuntimeError("provider down")
+        with pytest.raises(RuntimeError):
+            self._call(g, ["2026-01-05"])
+        assert g.reflector.reflect_on_final_decision.call_count == 1
+        assert len(log.get_pending_entries()) == 1
+
+    def test_nothing_pending_for_those_dates_is_a_no_op(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        g = self._graph(log)
+        assert self._call(g, ["2026-02-02"]) == 0
+        g._fetch_benchmark_return.assert_not_called()
+        g.reflector.reflect_on_final_decision.assert_not_called()
+
+    def test_other_tickers_and_dates_are_untouched(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        log.store_decision("AAPL", "2026-01-05", DECISION_BUY)
+        log.store_decision("NVDA", "2025-11-01", DECISION_HOLD)  # an earlier, rejected episode
+        g = self._graph(log)
+        assert self._call(g, ["2026-01-05"]) == 1
+        pending = {(e["ticker"], e["date"]) for e in log.get_pending_entries()}
+        assert pending == {("AAPL", "2026-01-05"), ("NVDA", "2025-11-01")}
+
+    def test_second_call_after_resolution_does_nothing(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        g = self._graph(log)
+        self._call(g, ["2026-01-05"])
+        assert self._call(g, ["2026-01-05"]) == 0
+        assert g.reflector.reflect_on_final_decision.call_count == 1
+
+
+class TestFetchBenchmarkReturn:
+
+    def _frame(self, closes):
+        import pandas as pd
+        return pd.DataFrame({"Close": closes})
+
+    def test_return_is_last_close_over_first_close(self):
+        g = MagicMock(spec=TradingAgentsGraph)
+        with patch("tradingagents.graph.trading_graph.yf.Ticker") as ticker:
+            ticker.return_value.history.return_value = self._frame([100.0, 102.0, 110.0])
+            assert TradingAgentsGraph._fetch_benchmark_return(g, "SPY", "2026-01-05", "2026-03-06") == pytest.approx(0.10)
+            kwargs = ticker.return_value.history.call_args.kwargs
+            assert kwargs["start"] == "2026-01-05" and kwargs["end"] == "2026-03-07"  # end is exclusive
+
+    def test_too_little_data_or_an_error_is_none(self):
+        g = MagicMock(spec=TradingAgentsGraph)
+        with patch("tradingagents.graph.trading_graph.yf.Ticker") as ticker:
+            ticker.return_value.history.return_value = self._frame([100.0])
+            assert TradingAgentsGraph._fetch_benchmark_return(g, "SPY", "2026-01-05", "2026-03-06") is None
+            ticker.return_value.history.side_effect = RuntimeError("blocked")
+            assert TradingAgentsGraph._fetch_benchmark_return(g, "SPY", "2026-01-05", "2026-03-06") is None
+
+
+class TestBm25TopK:
+
+    def test_ranks_the_document_sharing_the_rare_terms_first(self):
+        from tradingagents.agents.utils.bm25 import top_k
+        docs = [
+            "semiconductor demand slowing, inventory glut, margin pressure",
+            "regional bank deposit outflows and credit losses",
+            "memory chip pricing weak, semiconductor inventory correction",
+        ]
+        ranked = top_k("semiconductor inventory correction in chip demand", docs, 2)
+        assert [i for i, _ in ranked] == [2, 0]
+        assert ranked[0][1] > ranked[1][1] > 0
+
+    def test_documents_with_no_shared_term_are_never_returned(self):
+        from tradingagents.agents.utils.bm25 import top_k
+        assert top_k("lithium mining", ["bank deposits", "retail footfall"], 2) == []
+
+    def test_degenerate_inputs_return_empty(self):
+        from tradingagents.agents.utils.bm25 import top_k
+        assert top_k("", ["a b c"], 2) == []
+        assert top_k("a", [], 2) == []
+        assert top_k("a", ["a"], 0) == []
+        assert top_k("a", ["", "   "], 2) == []
+
+    def test_term_in_every_document_still_scores_and_ties_keep_input_order(self):
+        from tradingagents.agents.utils.bm25 import top_k
+        ranked = top_k("stock", ["stock", "stock"], 2)
+        assert [i for i, _ in ranked] == [0, 1] and ranked[0][1] > 0
+
+    def test_k_larger_than_the_corpus_is_fine(self):
+        from tradingagents.agents.utils.bm25 import top_k
+        assert len(top_k("alpha", ["alpha beta", "alpha gamma"], 10)) == 2
+
+
+class TestSimilarLessons:
+
+    def _log(self, tmp_path, situations):
+        log = make_log(tmp_path)
+        log.situation_lookup = lambda keys: {k: situations[k] for k in keys if k in situations}
+        return log
+
+    def _resolved(self, log, ticker, date, rating_decision, reflection):
+        log.store_decision(ticker, date, rating_decision)
+        log.update_with_outcome(ticker, date, 0.05, 0.02, 120, reflection)
+
+    def test_returns_the_best_matching_lessons_as_summaries(self, tmp_path):
+        sit = {
+            ("AAA", "2026-01-05"): "chip inventory correction, weak semiconductor demand",
+            ("BBB", "2026-01-06"): "bank deposit outflows, credit losses rising",
+            ("CCC", "2026-01-07"): "semiconductor pricing weak, inventory building",
+        }
+        log = self._log(tmp_path, sit)
+        self._resolved(log, "AAA", "2026-01-05", DECISION_SELL, "Exit early on inventory builds.")
+        self._resolved(log, "BBB", "2026-01-06", DECISION_BUY, "Banks were fine.")
+        self._resolved(log, "CCC", "2026-01-07", DECISION_SELL, "Chip pricing roll-over was real.")
+        out = log.get_similar_lessons("semiconductor inventory demand weak", "ZZZ", n=2)
+        assert out.startswith("Similar past situations")
+        assert "Exit early on inventory builds." in out and "Chip pricing roll-over was real." in out
+        assert "Banks were fine." not in out
+
+    def test_nothing_wired_or_nothing_matching_is_empty(self, tmp_path):
+        log = make_log(tmp_path)
+        self._resolved(log, "AAA", "2026-01-05", DECISION_SELL, "lesson")
+        assert log.get_similar_lessons("anything here", "ZZZ") == ""  # no lookup
+        log.situation_lookup = lambda keys: {("AAA", "2026-01-05"): "completely unrelated words"}
+        assert log.get_similar_lessons("semiconductor", "ZZZ") == ""
+        assert log.get_similar_lessons("   ", "ZZZ") == ""
+
+    def test_the_tickers_most_recent_entries_already_shown_are_excluded(self, tmp_path):
+        sit = {("AAA", "2026-01-05"): "chip inventory", ("AAA", "2026-02-05"): "chip inventory",
+               ("AAA", "2026-03-05"): "chip inventory", ("BBB", "2026-01-06"): "chip inventory"}
+        log = self._log(tmp_path, sit)
+        for t, d in sit:
+            self._resolved(log, t, d, DECISION_SELL, f"lesson {t} {d}")
+        out = log.get_similar_lessons("chip inventory", "AAA", n=5, n_same_shown=2)
+        assert "lesson AAA 2026-03-05" not in out and "lesson AAA 2026-02-05" not in out  # shown in full already
+        assert "lesson AAA 2026-01-05" in out and "lesson BBB 2026-01-06" in out
+
+    def test_pending_pointer_stub_and_report_less_entries_are_skipped(self, tmp_path):
+        from tradingagents.agents.utils.memory import REVIEW_POINTER_PREFIX
+        sit = {("AAA", "2026-01-05"): "chip inventory", ("BBB", "2026-01-06"): "chip inventory",
+               ("CCC", "2026-01-07"): "chip inventory"}
+        log = self._log(tmp_path, sit)
+        log.store_decision("AAA", "2026-01-05", DECISION_SELL)  # still pending
+        self._resolved(log, "BBB", "2026-01-06", DECISION_SELL, f"{REVIEW_POINTER_PREFIX} (entered x)")
+        self._resolved(log, "CCC", "2026-01-07", DECISION_SELL, "real lesson")
+        self._resolved(log, "DDD", "2026-01-08", DECISION_SELL, "no stored reports")
+        out = log.get_similar_lessons("chip inventory", "ZZZ", n=5)
+        assert "real lesson" in out and "no stored reports" not in out and REVIEW_POINTER_PREFIX not in out
+
+    def test_lookup_is_called_once_with_all_candidate_keys(self, tmp_path):
+        calls = []
+        log = make_log(tmp_path)
+        log.situation_lookup = lambda keys: calls.append(list(keys)) or {}
+        self._resolved(log, "AAA", "2026-01-05", DECISION_SELL, "l1")
+        self._resolved(log, "BBB", "2026-01-06", DECISION_SELL, "l2")
+        log.get_similar_lessons("anything", "ZZZ")
+        assert calls == [[("AAA", "2026-01-05"), ("BBB", "2026-01-06")]]
+
+
+class TestPmSimilarLessons:
+
+    def _pm(self, log, captured, n=2):
+        llm = _structured_pm_llm(captured)
+        return create_portfolio_manager(llm, memory_log=log, similar_lessons=n)
+
+    def _state(self, **kw):
+        s = _make_pm_state(**kw)
+        s.update(company_of_interest="ZZZ", market_report="chip inventory demand weak",
+                 sentiment_report="", news_report="semiconductor correction", fundamentals_report="")
+        return s
+
+    def test_similar_lessons_are_appended_to_the_lessons_section(self, tmp_path):
+        log = make_log(tmp_path)
+        log.situation_lookup = lambda keys: {k: "chip inventory demand weak" for k in keys}
+        log.store_decision("AAA", "2026-01-05", DECISION_SELL)
+        log.update_with_outcome("AAA", "2026-01-05", -0.08, -0.10, 120, "Sold into the inventory roll-over.")
+        captured = {}
+        self._pm(log, captured)(self._state(past_context="[2026-02-01 | ZZZ | Hold | +1.0% | +0.5% | 5d]\nsame-ticker lesson"))
+        prompt = captured["prompt"]
+        assert "same-ticker lesson" in prompt
+        assert "Similar past situations" in prompt and "Sold into the inventory roll-over." in prompt
+        assert prompt.index("same-ticker lesson") < prompt.index("Similar past situations")
+
+    def test_similar_lessons_alone_still_open_the_lessons_section(self, tmp_path):
+        log = make_log(tmp_path)
+        log.situation_lookup = lambda keys: {k: "chip inventory demand weak" for k in keys}
+        log.store_decision("AAA", "2026-01-05", DECISION_SELL)
+        log.update_with_outcome("AAA", "2026-01-05", -0.08, -0.10, 120, "lesson text")
+        captured = {}
+        self._pm(log, captured)(self._state(past_context=""))
+        assert "Lessons from prior decisions and outcomes" in captured["prompt"]
+
+    def test_a_failing_lookup_drops_the_section_and_the_pm_still_runs(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("AAA", "2026-01-05", DECISION_SELL)
+        log.update_with_outcome("AAA", "2026-01-05", -0.08, -0.10, 120, "lesson text")
+
+        def boom(keys):
+            raise RuntimeError("db locked")
+
+        log.situation_lookup = boom
+        captured = {}
+        result = self._pm(log, captured)(self._state(past_context=""))
+        assert "Similar past situations" not in captured["prompt"]
+        assert "final_trade_decision" in result
+
+    def test_no_memory_log_or_zero_count_is_the_old_behaviour(self, tmp_path):
+        log = make_log(tmp_path)
+        log.situation_lookup = lambda keys: {k: "chip inventory demand weak" for k in keys}
+        log.store_decision("AAA", "2026-01-05", DECISION_SELL)
+        log.update_with_outcome("AAA", "2026-01-05", -0.08, -0.10, 120, "lesson text")
+        for node_log, count in ((None, 2), (log, 0)):
+            captured = {}
+            node = create_portfolio_manager(_structured_pm_llm(captured), memory_log=node_log, similar_lessons=count)
+            node(self._state(past_context=""))
+            assert "Similar past situations" not in captured["prompt"]
+            assert "Lessons from prior decisions" not in captured["prompt"]
+        captured = {}
+        create_portfolio_manager(_structured_pm_llm(captured))(self._state(past_context=""))  # old signature
+        assert "Lessons from prior decisions" not in captured["prompt"]
+
+
+class TestPastContextSplit:
+    """The call site now asks for 2 same-ticker lessons and no cross-ticker ones."""
+
+    def test_two_same_ticker_and_no_cross_ticker(self, tmp_path):
+        log = make_log(tmp_path)
+        for d in ("2026-01-05", "2026-02-05", "2026-03-05"):
+            log.store_decision("NVDA", d, DECISION_BUY)
+            log.update_with_outcome("NVDA", d, 0.05, 0.02, 5, f"nvda {d}")
+        log.store_decision("AAPL", "2026-03-06", DECISION_BUY)
+        log.update_with_outcome("AAPL", "2026-03-06", 0.05, 0.02, 5, "aapl lesson")
+        ctx = log.get_past_context("NVDA", n_same=2, n_cross=0)
+        assert "nvda 2026-03-05" in ctx and "nvda 2026-02-05" in ctx and "nvda 2026-01-05" not in ctx
+        assert "aapl lesson" not in ctx and "cross-ticker" not in ctx
+
+    def test_defaults_in_config(self):
+        from tradingagents.default_config import DEFAULT_CONFIG
+        assert DEFAULT_CONFIG["memory_log_same_ticker_lessons"] == 2
+        assert DEFAULT_CONFIG["memory_log_similar_lessons"] == 2
+        assert DEFAULT_CONFIG["memory_log_holding_days"] == 180

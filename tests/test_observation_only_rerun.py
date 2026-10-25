@@ -43,7 +43,7 @@ class _FakeMemoryLog:
         self.get_pending_entries_calls = 0
         self.store_decision_calls = []
 
-    def get_past_context(self, ticker):
+    def get_past_context(self, ticker, n_same=5, n_cross=3):  # TODOS #168/M2: the call site passes counts
         self.get_past_context_calls.append(ticker)
         return "MEMORY_CONTEXT"
 

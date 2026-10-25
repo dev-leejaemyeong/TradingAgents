@@ -76,7 +76,7 @@ def rating_scale_for(evaluation_mode: str | None) -> str:
     return NEW_ENTRY_SCALE if evaluation_mode == "new_entry" else HELD_REVIEW_SCALE
 
 
-def create_portfolio_manager(llm):
+def create_portfolio_manager(llm, memory_log=None, similar_lessons: int = 2):
     structured_llm = bind_structured(llm, PortfolioDecision, "Portfolio Manager")
 
     def portfolio_manager_node(state) -> dict:
@@ -88,6 +88,23 @@ def create_portfolio_manager(llm):
         trader_plan = state["trader_investment_plan"]
 
         past_context = state.get("past_context", "")
+        # TODOS #168/M2: lessons whose recorded analyst reports resemble THIS
+        # run's. Computed here, not with past_context (which is built before
+        # the analysts have run): the four reports are the query. Decoration
+        # only -- any failure drops the section and the PM proceeds.
+        if memory_log is not None and similar_lessons > 0:
+            try:
+                query = "\n\n".join(
+                    state.get(k) or ""
+                    for k in ("market_report", "sentiment_report", "news_report", "fundamentals_report")
+                )
+                similar = memory_log.get_similar_lessons(
+                    query, state.get("company_of_interest", ""), n=similar_lessons
+                )
+            except Exception:
+                similar = ""
+            if similar:
+                past_context = f"{past_context}\n\n{similar}" if past_context else similar
         lessons_line = (
             f"- Lessons from prior decisions and outcomes:\n{past_context}\n"
             if past_context

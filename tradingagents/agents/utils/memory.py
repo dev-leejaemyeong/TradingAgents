@@ -3,7 +3,13 @@
 import re
 from pathlib import Path
 
+from tradingagents.agents.utils.bm25 import top_k
 from tradingagents.agents.utils.rating import parse_rating
+
+# Start of the stand-in reflection written on a held-position review that is
+# resolved together with its trade's entry decision (graph.resolve_closed_position,
+# TODOS #168/M1b). It carries no lesson, so similarity matching skips it.
+REVIEW_POINTER_PREFIX = "Review made while this position was held"
 
 
 class TradingMemoryLog:
@@ -24,6 +30,10 @@ class TradingMemoryLog:
             self._log_path.parent.mkdir(parents=True, exist_ok=True)
         # Optional cap on resolved entries. None disables rotation.
         self._max_entries = cfg.get("memory_log_max_entries")
+        # TODOS #168/M2: ``lookup(keys) -> {(ticker, date): analyst-report text}``,
+        # injected by the application that owns the reports (the main repo's
+        # ``debates`` table). None means no similarity lessons.
+        self.situation_lookup = None
 
     # --- Write path (Phase A) ---
 
@@ -32,8 +42,20 @@ class TradingMemoryLog:
         ticker: str,
         trade_date: str,
         final_trade_decision: str,
+        *,
+        only_if_rating_changed: bool = False,
     ) -> None:
-        """Append pending entry at end of propagate(). No LLM call."""
+        """Append pending entry at end of propagate(). No LLM call.
+
+        ``only_if_rating_changed`` (TODOS #168/M1a, 2026-10-23): skip the entry
+        when this ticker's most recent log entry (pending or resolved) already
+        carries the same rating. A monthly held-position review that keeps
+        saying "Hold" otherwise adds one more near-identical pending entry per
+        review and fills the "same ticker, most recent" window with repeats.
+        Opt-in: a new-entry decision must always be recorded (a re-entry after
+        an exit can legitimately repeat the previous episode's last rating),
+        so only the held-review caller passes True.
+        """
         if not self._log_path:
             return
         # Idempotency guard: fast raw-text scan instead of full parse
@@ -43,6 +65,10 @@ class TradingMemoryLog:
                 if line.startswith(f"[{trade_date} | {ticker} |") and line.endswith("| pending]"):
                     return
         rating = parse_rating(final_trade_decision)
+        if only_if_rating_changed:
+            last = self._last_entry_for(ticker)
+            if last is not None and last["rating"] == rating:
+                return
         tag = f"[{trade_date} | {ticker} | {rating} | pending]"
         entry = f"{tag}\n\nDECISION:\n{final_trade_decision}{self._SEPARATOR}"
         with open(self._log_path, "a", encoding="utf-8") as f:
@@ -62,6 +88,13 @@ class TradingMemoryLog:
             if parsed:
                 entries.append(parsed)
         return entries
+
+    def _last_entry_for(self, ticker: str) -> dict | None:
+        """The most recently logged entry for ``ticker`` (pending or resolved)."""
+        for entry in reversed(self.load_entries()):
+            if entry["ticker"] == ticker:
+                return entry
+        return None
 
     def get_pending_entries(self) -> list[dict]:
         """Return entries with outcome:pending (for Phase B)."""
@@ -93,6 +126,45 @@ class TradingMemoryLog:
             parts.append("Recent cross-ticker lessons:")
             parts.extend(self._format_reflection_only(e) for e in cross)
         return "\n\n".join(parts)
+
+    def get_similar_lessons(
+        self, query: str, ticker: str, *, n: int = 2, n_same_shown: int = 2
+    ) -> str:
+        """The ``n`` resolved lessons whose recorded analyst reports best match
+        ``query`` (this run's reports), as reflection-only summaries (TODOS
+        #168/M2). BM25 over each candidate entry's stored reports -- fetched in
+        ONE call to ``situation_lookup``. Entries without a real reflection
+        (stand-in pointers) or without stored reports are skipped, as are the
+        ``n_same_shown`` most recent entries of ``ticker`` -- those are already
+        in the prompt in full via get_past_context(). "" when nothing matches
+        or no lookup is wired."""
+        lookup = self.situation_lookup
+        if lookup is None or n <= 0 or not (query or "").strip():
+            return ""
+        resolved = [e for e in self.load_entries() if not e.get("pending")]
+        shown = {
+            (e["ticker"], e["date"])
+            for e in [e for e in reversed(resolved) if e["ticker"] == ticker][:n_same_shown]
+        }
+        candidates = [
+            e for e in resolved
+            if e["reflection"]
+            and not e["reflection"].startswith(REVIEW_POINTER_PREFIX)
+            and (e["ticker"], e["date"]) not in shown
+        ]
+        if not candidates:
+            return ""
+        situations = lookup([(e["ticker"], e["date"]) for e in candidates]) or {}
+        matchable = [(e, situations.get((e["ticker"], e["date"]))) for e in candidates]
+        matchable = [(e, s) for e, s in matchable if s]
+        if not matchable:
+            return ""
+        ranked = top_k(query, [s for _, s in matchable], n)
+        if not ranked:
+            return ""
+        lines = ["Similar past situations (matched on the analyst reports):"]
+        lines.extend(self._format_reflection_only(matchable[i][0]) for i, _ in ranked)
+        return "\n\n".join(lines)
 
     # --- Update path (Phase B) ---
 

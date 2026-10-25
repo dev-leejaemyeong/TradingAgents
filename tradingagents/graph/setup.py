@@ -52,6 +52,8 @@ class GraphSetup:
         tool_nodes: dict[str, ToolNode],
         conditional_logic: ConditionalLogic,
         node_llms: dict[str, Any] | None = None,
+        memory_log: Any = None,
+        similar_lessons: int = 2,
     ):
         """Initialize with required components.
 
@@ -67,6 +69,10 @@ class GraphSetup:
         self.tool_nodes = tool_nodes
         self.conditional_logic = conditional_logic
         self.node_llms = node_llms or {}
+        # TODOS #168/M2: lets the Portfolio Manager node look up similar past
+        # lessons from this run's own reports. None disables that part.
+        self.memory_log = memory_log
+        self.similar_lessons = similar_lessons
 
     def _llm_for(self, node_name: str, default: Any) -> Any:
         """Return the overridden LLM for ``node_name``, or ``default`` if none was set."""
@@ -139,7 +145,9 @@ class GraphSetup:
             cache_role_and_resources=cache_risk_rounds,
         )
         portfolio_manager_node = create_portfolio_manager(
-            self._llm_for("portfolio_manager", self.deep_thinking_llm)
+            self._llm_for("portfolio_manager", self.deep_thinking_llm),
+            memory_log=self.memory_log,
+            similar_lessons=self.similar_lessons,
         )
 
         # Create workflow
