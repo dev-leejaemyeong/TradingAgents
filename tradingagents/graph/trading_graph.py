@@ -388,6 +388,7 @@ class TradingAgentsGraph:
         entry_date: str,
         exit_date: str,
         realized_return: float,
+        outcome_facts: str | None = None,
     ) -> int:
         """Resolve a closed trade's pending log entries with its REALIZED
         outcome (TODOS #168/M1b, 2026-10-23) instead of waiting for a price
@@ -428,6 +429,7 @@ class TradingAgentsGraph:
             raw_return=realized_return,
             alpha_return=alpha,
             benchmark_name=benchmark,
+            outcome_facts=outcome_facts,
         )
         updates = [{
             "ticker": ticker,

@@ -484,6 +484,31 @@ class TestDeferredReflection:
         assert "-5.0%" in human_content
         assert "Exit position immediately." in human_content
 
+    def test_reflect_with_outcome_facts_adds_facts_and_grounding_rule(self):
+        """TODOS #246: facts go in the human message, the rule in the system prompt."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value.content = "ok"
+        Reflector(mock_llm).reflect_on_final_decision(
+            final_decision=DECISION_BUY, raw_return=-0.12, alpha_return=-0.12,
+            outcome_facts="Exit reason: negative_earnings_surprise.",
+        )
+        messages = mock_llm.invoke.call_args[0][0]
+        system = next(c for r, c in messages if r == "system")
+        human = next(c for r, c in messages if r == "human")
+        assert "Use ONLY those facts" in system
+        assert "Verified outcome facts:\nExit reason: negative_earnings_surprise." in human
+        assert human.index("Verified outcome facts") < human.index("Final Decision:")
+        mock_llm.invoke.assert_called_once()
+
+    def test_reflect_without_outcome_facts_is_unchanged(self):
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value.content = "ok"
+        reflector = Reflector(mock_llm)
+        reflector.reflect_on_final_decision(final_decision=DECISION_BUY, raw_return=0.04, alpha_return=0.02)
+        messages = mock_llm.invoke.call_args[0][0]
+        assert next(c for r, c in messages if r == "system") == reflector.log_reflection_prompt
+        assert "Verified outcome facts" not in next(c for r, c in messages if r == "human")
+
     # TradingAgentsGraph._fetch_returns
 
     def test_fetch_returns_valid_ticker(self):
@@ -1371,6 +1396,18 @@ class TestResolveClosedPosition:
         assert "recorded on the entry decision of 2026-01-05" in entries["2026-02-05"]["reflection"]
         for e in entries.values():
             assert "+10.0%" in e["raw"] and "+6.0%" in e["alpha"] and e["holding"] == "60d"
+
+    def test_outcome_facts_reach_the_single_reflection_call(self, tmp_path):
+        log = make_log(tmp_path)
+        log.store_decision("NVDA", "2026-01-05", DECISION_BUY)
+        log.store_decision("NVDA", "2026-02-05", DECISION_SELL)
+        g = self._graph(log)
+        TradingAgentsGraph.resolve_closed_position(
+            g, "NVDA", ["2026-01-05", "2026-02-05"], "2026-01-05", "2026-03-06", 0.10,
+            outcome_facts="Exit reason: stop_loss.",
+        )
+        g.reflector.reflect_on_final_decision.assert_called_once()
+        assert g.reflector.reflect_on_final_decision.call_args.kwargs["outcome_facts"] == "Exit reason: stop_loss."
 
     def test_benchmark_is_measured_over_the_holding_dates(self, tmp_path):
         log = make_log(tmp_path)
