@@ -496,6 +496,7 @@ class TestDeferredReflection:
         system = next(c for r, c in messages if r == "system")
         human = next(c for r, c in messages if r == "human")
         assert "Use ONLY those facts" in system
+        assert "the facts win; never say a quoted target was hit" in system
         assert "Verified outcome facts:\nExit reason: negative_earnings_surprise." in human
         assert human.index("Verified outcome facts") < human.index("Final Decision:")
         mock_llm.invoke.assert_called_once()

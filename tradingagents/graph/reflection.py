@@ -36,7 +36,10 @@ class Reflector:
         "\n\nVerified outcome facts are provided below the returns. Use ONLY those facts and the "
         "decision text. Do not state any market, technical, macro or company event that happened "
         "after the decision unless the facts list it. Name the exit reason, and if the peak price "
-        "is well above the exit price say how much of the gain was given back."
+        "is well above the exit price say how much of the gain was given back. If the decision "
+        "text quotes a stop-loss, take-profit or price target that differs from the enforced "
+        "levels in the facts, the facts win; never say a quoted target was hit unless the exit "
+        "price is at that target."
     )
 
     def reflect_on_final_decision(
