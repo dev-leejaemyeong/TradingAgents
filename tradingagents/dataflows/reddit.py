@@ -1,5 +1,13 @@
 """Reddit search fetcher for ticker-specific discussion posts.
 
+DISABLED 2026-11-18 (``_RSS_DISCONTINUED``): Reddit ended its RSS feeds on
+2026-11-13 (announced 2026-09-30) and is closing public API access through
+2027-03; every anonymous feed URL now returns ``404 Not Found`` (measured from
+Python and from a browser on the same PC), and OAuth registration is closed.
+``fetch_reddit_posts()`` therefore makes no request and returns an explicit
+"discontinued" placeholder. The fetcher below is kept for the day a Reddit
+source works again -- set the flag to False to re-enable it.
+
 Default path is Reddit's public Atom/RSS search feed
 (``reddit.com/r/{sub}/search.rss``). The richer JSON search endpoint
 (``/search.json``) is reliably WAF-blocked (``HTTP 403``) for public clients
@@ -56,6 +64,9 @@ _RSS = "https://www.reddit.com/r/{sub}/search.rss?{qs}"
 # JSON search endpoint 403s, so no browser-spoofing is needed.
 _UA = "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)"
 _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
+
+# Master switch: True = do not touch Reddit at all (see module docstring).
+_RSS_DISCONTINUED = True
 
 # Default subreddits ordered roughly by signal density for ticker-specific
 # discussion. wallstreetbets has the most volume but most noise; stocks /
@@ -299,6 +310,14 @@ def fetch_reddit_posts(
     # Crypto reaches us as a Yahoo pair (BTC-USD); search Reddit for the base
     # ("BTC") so the query actually matches discussion instead of near-nothing.
     ticker = crypto_base(ticker) or ticker
+    if _RSS_DISCONTINUED:
+        # No request, no wait: a permanent shutdown, not a rate limit. Worded so
+        # the analyst reads it as a missing source, never as market silence.
+        return (
+            "<Reddit unavailable -- Reddit discontinued its RSS feeds on 2026-11-13; "
+            f"this source is permanently offline (no request made), NOT evidence of an "
+            f"absence of {ticker.upper()} discussion>"
+        )
     label = ", ".join(f"r/{s}" for s in subreddits)
     fetched = _fetch_subreddit(ticker, "+".join(subreddits), _FEED_PAGE, timeout)
     if fetched is None:

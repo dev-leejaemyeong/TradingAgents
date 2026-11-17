@@ -42,6 +42,13 @@ def _http_error(code, msg, headers):
 
 
 @pytest.fixture(autouse=True)
+def _rss_enabled(monkeypatch):
+    """The module ships disabled (Reddit ended RSS on 2026-11-13); these tests
+    exercise the fetcher for the day it is switched back on."""
+    monkeypatch.setattr(reddit, "_RSS_DISCONTINUED", False)
+
+
+@pytest.fixture(autouse=True)
 def _close_http_errors():
     yield
     while _OPEN_ERRORS:
@@ -451,3 +458,35 @@ class TestCryptoSearchTerm:
 
     def test_equity_passes_through(self):
         assert self._captured_ticker("NVDA") == "NVDA"
+
+
+@pytest.mark.unit
+class TestDiscontinuedSwitch:
+    """Reddit ended RSS on 2026-11-13: the shipped default makes no request."""
+
+    @pytest.fixture(autouse=True)
+    def _rss_enabled(self):   # override the module fixture: test the real default
+        yield
+
+    def test_shipped_default_is_discontinued(self):
+        assert reddit._RSS_DISCONTINUED is True
+
+    def test_makes_no_request_and_never_sleeps(self):
+        with patch.object(reddit, "urlopen", side_effect=AssertionError("no request expected")), \
+             patch.object(reddit.time, "sleep", side_effect=AssertionError("no wait expected")):
+            out = reddit.fetch_reddit_posts("NVDA")
+        assert "discontinued" in out and "permanently offline" in out
+        assert "NOT evidence of an absence of NVDA discussion" in out
+
+    def test_placeholder_is_not_read_as_silence(self):
+        out = reddit.fetch_reddit_posts("NVDA")
+        assert "no posts found" not in out and "no Reddit posts" not in out
+
+    def test_crypto_pair_uses_the_base_symbol(self):
+        assert "absence of BTC discussion" in reddit.fetch_reddit_posts("BTC-USD")
+
+    def test_switching_it_off_restores_the_fetch(self, monkeypatch):
+        monkeypatch.setattr(reddit, "_RSS_DISCONTINUED", False)
+        with patch.object(reddit, "urlopen", return_value=_atom_resp()) as op:
+            out = reddit.fetch_reddit_posts("NVDA", subreddits=("stocks",))
+        assert op.call_count == 1 and "NVDA earnings beat" in out
