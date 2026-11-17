@@ -93,13 +93,20 @@ def _strip_html(content: str) -> str:
 def _retry_after_seconds(exc: HTTPError) -> float | None:
     """Seconds to wait from a 429's ``Retry-After`` header, capped at 30s.
 
-    Returns ``None`` only when the header is absent or unparseable; a valid
-    ``Retry-After: 0`` returns ``0.0`` (retry at once), not ``None`` -- the old
-    ``if val else None`` treated "0" as falsy and waited the 5s fallback anyway.
+    Returns ``None`` when the header is absent, unparseable, negative or NaN; a
+    valid ``Retry-After: 0`` returns ``0.0`` (retry at once), not ``None`` -- the
+    old ``if val else None`` treated "0" as falsy and waited the 5s fallback
+    anyway. Negative/NaN delays are rejected because ``time.sleep()`` raises
+    ValueError on them, which would escape the 429 handler (upstream #1601).
     """
     try:
         val = exc.headers.get("Retry-After") if getattr(exc, "headers", None) else None
-        return min(float(val), 30.0) if val is not None else None
+        if val is None:
+            return None
+        secs = float(val)
+        if secs != secs or secs < 0:   # NaN or negative
+            return None
+        return min(secs, 30.0)
     except (ValueError, TypeError, AttributeError):
         return None
 

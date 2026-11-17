@@ -178,6 +178,36 @@ class TestRss429Backoff:
         (wait,), _ = slept.call_args
         assert 4.0 <= wait <= 6.0
 
+    # A malformed numeric Retry-After ("-1", "nan") used to be returned as the
+    # wait; the real time.sleep() raises ValueError for both, and that raise
+    # happens inside `except HTTPError` so it escaped the fetch. (upstream #1601)
+    @staticmethod
+    def _strict_sleep(seconds):
+        if seconds != seconds or seconds < 0:   # same contract as time.sleep
+            raise ValueError("sleep length must be a non-negative number")
+
+    @pytest.mark.parametrize("raw", ["-1", "-0.5", "nan", "NaN"])
+    def test_invalid_retry_after_uses_the_jittered_fallback(self, raw):
+        err = HTTPError("url", 429, "Too Many Requests", {"Retry-After": raw}, None)
+        with patch.object(reddit, "urlopen", side_effect=[err, _atom_resp()]) as op, \
+             patch.object(reddit.time, "sleep", side_effect=self._strict_sleep) as slept:
+            posts = reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
+        assert op.call_count == 2          # retried, not crashed
+        assert len(posts) == 2
+        (wait,), _ = slept.call_args
+        assert 4.0 <= wait <= 6.0          # headerless fallback
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("0", 0.0), ("12", 12.0), ("100", 30.0), ("inf", 30.0),   # valid/capped: unchanged
+        ("-1", None), ("-0.5", None), ("nan", None), ("abc", None), ("", None),
+    ])
+    def test_retry_after_seconds_parsing(self, raw, expected):
+        err = HTTPError("url", 429, "Too Many Requests", {"Retry-After": raw}, None)
+        try:
+            assert reddit._retry_after_seconds(err) == expected
+        finally:
+            err.close()   # fp=None makes HTTPError open a temp file; avoid ResourceWarning
+
 
 @pytest.mark.unit
 class TestChunkedTransferErrorsHandled:
