@@ -6,6 +6,12 @@ API key, no OAuth, and no registration. Each message includes a
 user-labeled sentiment field (``Bullish``/``Bearish``/null), the message
 body, timestamp, and posting user.
 
+The stream returns the latest 30 messages whatever their age, so for thinly
+traded tickers they span months. Only messages from the past ``window_days``
+(default 7) feed the Bullish/Bearish ratio; older ones are ignored and the block
+says how many were used (TODOS #274, measured 2026-11-18: median 7% of the 30
+were within 7 days, 13 of 59 tickers had none).
+
 The function is deliberately self-contained: short timeout, graceful
 degradation on any HTTP or parse failure, and a string return type so
 the calling agent gets a uniform interface regardless of whether the
@@ -17,6 +23,7 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 
 from .symbol_utils import crypto_base
@@ -25,6 +32,20 @@ logger = logging.getLogger(__name__)
 
 _API = "https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
 _UA = "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)"
+
+
+_WINDOW_DAYS = 7.0
+
+
+def _age_days(created_at, now: datetime) -> float | None:
+    """Age in days of a StockTwits ``created_at`` stamp, or None if unreadable."""
+    try:
+        dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (now - dt).total_seconds() / 86400
 
 
 def _stocktwits_symbol(ticker: str) -> str:
@@ -38,9 +59,18 @@ def _stocktwits_symbol(ticker: str) -> str:
     return f"{base}.X" if base else ticker.strip().upper()
 
 
-def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.0) -> str:
+def fetch_stocktwits_messages(
+    ticker: str,
+    limit: int = 30,
+    timeout: float = 10.0,
+    window_days: float = _WINDOW_DAYS,
+    now: datetime | None = None,
+) -> str:
     """Fetch recent StockTwits messages for ``ticker`` and return them as a
     formatted plaintext block ready for prompt injection.
+
+    Only messages from the past ``window_days`` are used; a message whose date
+    cannot be read is not trusted as recent. ``now`` is injectable for tests.
 
     Returns a placeholder string when the endpoint is unreachable, the
     symbol has no messages, or the response shape is unexpected — the
@@ -61,9 +91,24 @@ def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.
     if not messages:
         return f"<no StockTwits messages found for ${ticker.upper()}>"
 
+    now = now or datetime.now(timezone.utc)
+    fetched = messages[:limit]
+    aged = [(m, _age_days(m.get("created_at"), now)) for m in fetched]
+    fresh = [m for m, age in aged if age is not None and age <= window_days]
+    if not fresh:
+        ages = [age for _, age in aged if age is not None]
+        detail = (
+            f"the newest of the {len(fetched)} fetched is {max(min(ages), 0):.0f} days old"
+            if ages else f"none of the {len(fetched)} fetched messages has a readable date"
+        )
+        return (
+            f"<no StockTwits messages for ${ticker.upper()} in the past {window_days:g} days: "
+            f"{detail}; older posts ignored, so there is no bullish/bearish ratio to read>"
+        )
+
     lines = []
     bullish = bearish = unlabeled = 0
-    for m in messages[:limit]:
+    for m in fresh:
         created = m.get("created_at", "")
         user = (m.get("user") or {}).get("username", "?")
         entities = m.get("entities") or {}
@@ -88,6 +133,8 @@ def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.
     bull_pct = round(100 * bullish / total) if total else 0
     bear_pct = round(100 * bearish / total) if total else 0
     summary = (
+        f"Window: {len(fresh)} of {len(fetched)} fetched messages are from the past "
+        f"{window_days:g} days (older ignored)\n"
         f"Bullish: {bullish} ({bull_pct}%) · "
         f"Bearish: {bearish} ({bear_pct}%) · "
         f"Unlabeled: {unlabeled} · "
